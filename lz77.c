@@ -199,6 +199,8 @@ uint8_t* lz77_uncompress(const uint8_t* compressed_data, size_t size)
 #include <stdio.h>
 
 // https://go-compression.github.io/algorithms/lzss/
+// https://gist.github.com/fogus/5401265
+// https://github.com/cstdvd/lz77
 
 int main(int argc, char* argv[])
 {
