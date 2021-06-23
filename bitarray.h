@@ -274,13 +274,13 @@ static inline void _bitarray_clearbit(void* b, size_t index)
     _bitarray_header(b)->_buf[index / 8] &= ~(1 << (index & 7));
 }
 
-static inline uint8_t _bitarray_bit(void* b, size_t index)
+static inline uint8_t _bitarray_bit(const void* b, size_t index)
 {
     assert(index < bitarray_size(b) && "bitarray:bit index out of bounds.");
     return (_bitarray_header(b)->_buf[index / 8] >> (index & 7)) & 0x1;
 }
 
-static inline uint64_t _bitarray_bits_lsb(void* b, size_t index, size_t n)
+static inline uint64_t _bitarray_bits_lsb(const void* b, size_t index, size_t n)
 {
     assert(index + n <= bitarray_size(b) && "bitarray:bits_lsb range out of bounds.");
     assert(n < 64 && "bitarray:bits_lsb can read at most 64 bits.");
@@ -294,7 +294,7 @@ static inline uint64_t _bitarray_bits_lsb(void* b, size_t index, size_t n)
     return bits;
 }
 
-static inline uint64_t _bitarray_bits_msb(void* b, size_t index, size_t n)
+static inline uint64_t _bitarray_bits_msb(const void* b, size_t index, size_t n)
 {
     assert(index + n <= bitarray_size(b) && "bitarray:bits_msb range out of bounds.");
     assert(n < 64 && "bitarray:bits_msb can read at most 64 bits.");
