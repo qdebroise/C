@@ -153,6 +153,9 @@ typedef uint8_t bitarray_t;
 #define bitarray_bits_lsb(B, I, N) _bitarray_bits_lsb(B, I, N)
 #define bitarray_bits_msb(B, I, N) _bitarray_bits_msb(B, I, N)
 
+#define bitarray_to_byte_array(B)
+#define bitarray_from_byte_array(B, A)
+
 // -----------------------------------------------------------------------------
 // Implementation details.
 // -----------------------------------------------------------------------------
@@ -172,7 +175,7 @@ static inline struct _bitarray_header_t* _bitarray_reserve(void* b, size_t num_b
 
     const size_t bytes_required = (num_bits + 7) / 8; // Ceiling operation.
 
-    if (header && bytes_required < header->_bytes_allocated)
+    if (header && bytes_required <= header->_bytes_allocated)
     {
         // There is already enough place for the number of bits asked.
         return header;
@@ -188,6 +191,7 @@ static inline struct _bitarray_header_t* _bitarray_reserve(void* b, size_t num_b
         if (!b)
         {
             // This is the first allocation.
+
             header->_size = 0;
         }
 
@@ -196,7 +200,7 @@ static inline struct _bitarray_header_t* _bitarray_reserve(void* b, size_t num_b
     }
     else
     {
-        // Out of memory.
+        assert(!"bitarray:_reserve out of memory.");
         return NULL;
     }
 }

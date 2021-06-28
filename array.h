@@ -121,6 +121,37 @@ struct _array_header_t
 
 static inline void* _array_reserve(void* b, size_t capacity, size_t size)
 {
+    /*
+    struct _array_header_t* header = b ? _array_header(b) : NULL;
+
+    if (header && capacity <= header->_capacity)
+    {
+        // There is already enough place for the size asked.
+        return header->_buf;
+    }
+
+    // Ensure at least 1 element is allocated. We don't want any problems when 0 elements are asked.
+    const size_t new_capacity = capacity == 0 ? 1 : capacity;
+    const size_t alloc_size = new_capacity * size * sizeof(struct _array_header_t);
+    header = realloc(header, alloc_size);
+
+    if (header)
+    {
+        if (!b)
+        {
+            header->_size = 0;
+        }
+
+        header->_capacity = new_capacity;
+        return header->_buf;
+    }
+    else
+    {
+        assert(!"array.h:_reserve out of memory.");
+        return NULL;
+    }
+    */
+
     static const size_t array_min_capacity = 1;
 
     // @Todo: don't reserve when request capacity is inferior to the current array capacity.
