@@ -48,7 +48,7 @@
 //        +-------+----+
 //        |abracad|abra|        -> (7, 4, NULL) -> abra
 
-#include "lz77.h"
+#include "lz.h"
 
 #include "array.h"
 #include "bitarray.h"
@@ -79,7 +79,9 @@ static inline size_t min(size_t a, size_t b)
 //  it will be the closest to the look-ahead buffer.
 //  - The search can go beyong `str` size to allow overlapping the look-ahead buffer. The only constraint
 //  is the match must not be longer than `pattern_size`.
-static void find_prefix(
+//
+// @Todo @Performance: change this function into something faster. Typically, see about using hashtables for fast prefix lookup.
+static void _find_prefix(
     const uint8_t* pattern, size_t pattern_size,
     const uint8_t* str, size_t str_size,
     size_t* match_offset, size_t* match_length)
@@ -87,7 +89,7 @@ static void find_prefix(
     size_t best_match_offset = 0;
     size_t best_match_length = 0;
 
-    for (int i = 0; i < str_size; ++i)
+    for (size_t i = 0; i < str_size; ++i)
     {
         if (pattern[0] != str[i]) continue;
 
@@ -108,7 +110,11 @@ static void find_prefix(
     *match_length = best_match_length;
 }
 
-static void emit_triplet(uint8_t** compressed_data, size_t offset, size_t length, uint8_t next_byte)
+// =====================
+// ===     LZ77      ===
+// =====================
+
+static void _emit_triplet(uint8_t** compressed_data, size_t offset, size_t length, uint8_t next_byte)
 {
     assert(offset <= SEARCH_BUFFER_SIZE);
     assert(length <= LOOK_AHEAD_BUFFER_SIZE);
@@ -128,9 +134,6 @@ static void emit_triplet(uint8_t** compressed_data, size_t offset, size_t length
 uint8_t* lz77_compress(const uint8_t* data, size_t size)
 {
     uint8_t* compressed_data = NULL; // Array.
-    bitarray_t* ba = NULL; // Bit array.
-
-    size_t bits = 0; // Tmp, count emitted bits.
 
     size_t index = 0;
     while (index < size)
@@ -152,20 +155,11 @@ uint8_t* lz77_compress(const uint8_t* data, size_t size)
         const uint8_t* search_buffer_ptr = current - search_buffer_content_size;
 
         size_t match_offset, match_length;
-        find_prefix(current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
+        _find_prefix(current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
 
-        // Match length 1 -> 1b + 3*8b = 25b VS 1*9b = 9b       25 - 9  Bad
-        // Match length 2 -> 1b + 3*8b = 25b VS 2*9b = 18b      25 - 18 Bad
-        // Match length 3 -> 1b + 3*8b = 25b VS 2*9b = 27b      25 - 27 Good -> start encoding pair <length, offset> when match length is at least 3 caracters long.
-        //
-
-        // if (match_length == 0)
-        if (match_length < 3)
+        if (match_length == 0)
         {
-            match_length = 0;
-            bitarray_push(ba, 0);
-            bitarray_push_bits_lsb(ba, *current, 8);
-            // emit_triplet(&compressed_data, 0, 0, *current);
+            _emit_triplet(&compressed_data, 0, 0, *current);
         }
         else
         {
@@ -173,68 +167,19 @@ uint8_t* lz77_compress(const uint8_t* data, size_t size)
             match_offset = search_buffer_content_size - match_offset;
             // If we reached the end of the data stream then the next byte in the triplet is NULL.
             uint8_t next_byte = current + match_length == current + size ? 0 : current[match_length];
-            // emit_triplet(&compressed_data, match_offset, match_length, next_byte);
-
-            uint16_t truncated_offset = (SEARCH_BUFFER_SIZE - 1) & match_offset; // 12 bits
-            uint16_t truncated_length = (LOOK_AHEAD_BUFFER_SIZE - 1) & match_length; // 4 bits
-            uint16_t combined = (truncated_offset << ENCODED_LENGTH_BITS) | truncated_length;
-
-            /*
-            uint8_t low = combined & 0x00ff;
-            uint8_t high = (combined & 0xff00) >> 8;
-
-            array_push(*compressed_data, high);
-            array_push(*compressed_data, low);
-            array_push(*compressed_data, next_byte);
-            */
-
-            bitarray_push(ba, 1);
-            bitarray_push_bits_lsb(ba, truncated_offset, 12);
-            bitarray_push_bits_lsb(ba, truncated_length, 4);
-            bitarray_push_bits_lsb(ba, next_byte, 8);
+            _emit_triplet(&compressed_data, match_offset, match_length, next_byte);
         }
 
         index += match_length + 1;
     }
 
-    printf("===> %d\n", bitarray_size(ba) / 8);
-
-    // return compressed_data;
-    return ba;
+    return compressed_data;
 }
 
 uint8_t* lz77_uncompress(const uint8_t* compressed_data, size_t size)
 {
     uint8_t* data = NULL; // Array.
 
-    for (size_t i = 0; i < bitarray_size(compressed_data);)
-    {
-        if (bitarray_bit(compressed_data, i) == 0)
-        {
-            uint8_t byte = bitarray_bits_lsb(compressed_data, i + 1, 8);
-            i += 9;
-            array_push(data, byte);
-        }
-        else
-        {
-            uint16_t offset = bitarray_bits_lsb(compressed_data, i + 1, 12);
-            uint16_t length = bitarray_bits_lsb(compressed_data, i + 13, 4);
-            uint8_t byte = bitarray_bits_lsb(compressed_data, i + 17, 8);
-            i += 25;
-
-            const uint8_t* it = data + array_size(data) - offset;
-            const uint8_t* end = it + length;
-            while (it != end)
-            {
-                array_push(data, *it);
-                ++it;
-            }
-
-            array_push(data, byte);
-        }
-    }
-
-    /*
     for (const uint8_t* byte = compressed_data; byte < compressed_data + size; byte+=3)
     {
         uint16_t combined = (byte[0] << 8) | byte[1];
@@ -242,6 +187,10 @@ uint8_t* lz77_uncompress(const uint8_t* compressed_data, size_t size)
 
         uint16_t offset = combined >> ENCODED_LENGTH_BITS;
         uint16_t length = combined & (LOOK_AHEAD_BUFFER_SIZE - 1);
+
+        // We reserve the required space up front. We cannot rely on `array_push()` to
+        // reserve memory as it modifies the `data` pointer and thus invalidates `it` and `end`.
+        array_reserve(data, array_size(data) + length);
 
         const uint8_t* it = data + array_size(data) - offset;
         const uint8_t* end = it + length;
@@ -253,14 +202,22 @@ uint8_t* lz77_uncompress(const uint8_t* compressed_data, size_t size)
 
         array_push(data, next_byte);
     }
-    */
 
     return data;
 }
 
+// =====================
+// ===     LZSS      ===
+// =====================
+
+// Match length 1 -> 1b + 3*8b = 25b VS 1*9b = 9b       25 - 9  Bad
+// Match length 2 -> 1b + 3*8b = 25b VS 2*9b = 18b      25 - 18 Bad
+// Match length 3 -> 1b + 3*8b = 25b VS 2*9b = 27b      25 - 27 Good -> start encoding pair <length, offset> when match length is at least 3 caracters long.
+#define LZSS_MIN_MATCH_LENGTH 3
+
 uint8_t* lzss_compress(const uint8_t* data, size_t size)
 {
-    bitarray_t* compressed_data = NULL; // Bit array.
+    bitarray_t compressed_data = {0}; // Bit array.
 
     size_t index = 0;
     while (index < size)
@@ -282,16 +239,12 @@ uint8_t* lzss_compress(const uint8_t* data, size_t size)
         const uint8_t* search_buffer_ptr = current - search_buffer_content_size;
 
         size_t match_offset, match_length;
-        find_prefix(current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
+        _find_prefix(current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
 
-        // Match length 1 -> 1b + 3*8b = 25b VS 1*9b = 9b       25 - 9  Bad
-        // Match length 2 -> 1b + 3*8b = 25b VS 2*9b = 18b      25 - 18 Bad
-        // Match length 3 -> 1b + 3*8b = 25b VS 2*9b = 27b      25 - 27 Good -> start encoding pair <length, offset> when match length is at least 3 caracters long.
-
-        if (match_length < 3)
+        if (match_length < LZSS_MIN_MATCH_LENGTH)
         {
-            bitarray_push(compressed_data, 0);
-            bitarray_push_bits_lsb(compressed_data, *current, 8);
+            bitarray_push(&compressed_data, 0);
+            bitarray_push_bits_lsb(&compressed_data, *current, 8);
 
             index += 1;
         }
@@ -302,36 +255,44 @@ uint8_t* lzss_compress(const uint8_t* data, size_t size)
 
             uint16_t truncated_offset = (SEARCH_BUFFER_SIZE - 1) & match_offset; // 12 bits
             uint16_t truncated_length = (LOOK_AHEAD_BUFFER_SIZE - 1) & match_length; // 4 bits
-            uint16_t combined = (truncated_offset << ENCODED_LENGTH_BITS) | truncated_length;
 
-            bitarray_push(compressed_data, 1);
-            bitarray_push_bits_lsb(compressed_data, truncated_offset, 12);
-            bitarray_push_bits_lsb(compressed_data, truncated_length, 4);
+            bitarray_push(&compressed_data, 1);
+            bitarray_push_bits_lsb(&compressed_data, truncated_offset, 12);
+            bitarray_push_bits_lsb(&compressed_data, truncated_length, 4);
 
             index += match_length;
         }
     }
 
-    return compressed_data;
+    return compressed_data.data;
 }
 
 uint8_t* lzss_uncompress(const uint8_t* compressed_data, size_t size)
 {
     uint8_t* data = NULL; // Array.
 
-    for (size_t i = 0; i < bitarray_size(compressed_data);)
+    const bitarray_t ba = {
+        .size = size * 8,
+        .data = (uint8_t*)compressed_data,
+    };
+
+    for (size_t i = 0; i < ba.size;)
     {
-        if (bitarray_bit(compressed_data, i) == 0)
+        if (bitarray_bit(&ba, i) == 0)
         {
-            uint8_t byte = bitarray_bits_lsb(compressed_data, i + 1, 8);
+            uint8_t byte = bitarray_bits_lsb(&ba, i + 1, 8);
             array_push(data, byte);
             i += 9;
         }
         else
         {
-            uint16_t offset = bitarray_bits_lsb(compressed_data, i + 1, 12);
-            uint16_t length = bitarray_bits_lsb(compressed_data, i + 13, 4);
+            uint16_t offset = bitarray_bits_lsb(&ba, i + 1, 12);
+            uint16_t length = bitarray_bits_lsb(&ba, i + 13, 4);
             i += 17;
+
+            // We reserve the required space up front. We cannot rely on `array_push()` to
+            // reserve memory as it modifies the `data` pointer and thus invalidates `it` and `end`.
+            array_reserve(data, array_size(data) + length);
 
             const uint8_t* it = data + array_size(data) - offset;
             const uint8_t* end = it + length;
@@ -348,6 +309,7 @@ uint8_t* lzss_uncompress(const uint8_t* compressed_data, size_t size)
 
 
 #include <stdio.h>
+#include <time.h> // very basic and undersimplified timing.
 
 // https://go-compression.github.io/algorithms/lzss/
 // https://gist.github.com/fogus/5401265
@@ -361,7 +323,7 @@ int main(int argc, char* argv[])
     // static const char str[] = "aacaacabcabaaac";
     // static const size_t size = sizeof(str) / sizeof(str[0]);
 
-    FILE* f = fopen("bitarray.h", "rb");
+    FILE* f = fopen("bible.txt", "rb");
     if (!f) return 1;
     fseek(f, 0, SEEK_END);
     size_t end = ftell(f);
@@ -369,36 +331,51 @@ int main(int argc, char* argv[])
     uint8_t* content = malloc(end);
     fread(content, 1, end, f);
     fclose(f);
-    uint8_t* compressed_data = lzss_compress(content, end);
 
-    // printf("Compressing: \"%s\"\n\n", str);
+    clock_t tic, toc;
 
-    // uint8_t* compressed_data = lz77_compress(str, size);
-    uint8_t* uncompressed_data = lzss_uncompress(compressed_data, array_size(compressed_data));
+    tic = clock();
+    uint8_t* lz77_compressed_data = lz77_compress(content, end);
+    toc = clock();
+    float lz77_compression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
 
-    printf("Compressed data stream:\n");
+    tic = clock();
+    uint8_t* lz77_uncompressed_data = lz77_uncompress(lz77_compressed_data, array_size(lz77_compressed_data));
+    toc = clock();
+    float lz77_uncompression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
+
+    tic = clock();
+    uint8_t* lzss_compressed_data = lzss_compress(content, end);
+    toc = clock();
+    float lzss_compression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
+
+    tic = clock();
+    uint8_t* lzss_uncompressed_data = lzss_uncompress(lzss_compressed_data, array_size(lzss_compressed_data));
+    toc = clock();
+    float lzss_uncompression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
+
+    printf("LZ77:\n\tCompression rate (%%): %.3f\n\tCompression time (s): %f\n\tUncompression time (s): %f\n",
+            (1 - array_size(lz77_compressed_data) / (float)array_size(lz77_uncompressed_data)) * 100,
+            lz77_compression_time_s, lz77_uncompression_time_s);
+    printf("LZSS:\n\tCompression rate (%%): %.3f\n\tCompression time (s): %f\n\tUncompression time (s): %f\n",
+            (1 - array_size(lzss_compressed_data) / (float)array_size(lzss_uncompressed_data)) * 100,
+            lzss_compression_time_s, lzss_uncompression_time_s);
+
     /*
-    for (uint8_t* byte = compressed_data; byte < compressed_data + array_size(compressed_data); ++byte)
+    printf("LZSS compressed data stream:\n");
+    for (int i = 0; i < array_size(lzss_compressed_data); ++i)
     {
-        printf("0x%x ", *byte);
+        printf("0x%x ", lzss_compressed_data[i]);
     }
-    printf("\nCompressed size: %lu bytes\n\n", array_size(compressed_data));
-    */
-    for (int i = 0; i < bitarray_size(compressed_data); i+=8)
-    {
-        uint8_t byte = bitarray_bits_lsb(compressed_data, i, 8);
-        printf("0x%x ", byte);
-    }
-    printf("\nCompressed size: %lu bytes\n\n", bitarray_size(compressed_data) / 8);
+    printf("\nCompressed size: %lu bytes\n\n", array_size(lzss_compressed_data));
 
     printf("Uncompressed data stream:\n");
-    for (uint8_t* byte = uncompressed_data; byte < uncompressed_data + array_size(uncompressed_data); ++byte)
+    for (uint8_t* byte = lzss_uncompressed_data; byte < lzss_uncompressed_data + array_size(lzss_uncompressed_data); ++byte)
     {
         printf("%c", *byte);
     }
-    printf("\nUncompressed size: %lu bytes\n", array_size(uncompressed_data));
-
-    printf("\nCompression rate: %.3f%\n", (1 - (bitarray_size(compressed_data) / 8) / (float)array_size(uncompressed_data)) * 100);
+    printf("\nUncompressed size: %lu bytes\n", array_size(lzss_uncompressed_data));
+    */
 
     return 0;
 }

@@ -35,6 +35,9 @@
 // Resize the array storage so that it can hold at least `size` elements without the need
 // of being resized.
 //
+// `array_resize(array, size) -> (void)`
+// Resize the array storage and set the array size to the specified value. Elements are uninitialized.
+//
 // `array_clear(array) -> (void)`
 // Removes all elements from the array leaving it with a size of 0. This does not skrink
 // the allocated storage.
@@ -87,6 +90,7 @@
 #define array_pop(B) (array_size(B) > 0 ? _array_header(B)->_size-- : 0)
 #define array_free(B) ((B) ? free(_array_header(B)), (B) = NULL : 0)
 #define array_reserve(B, N) ((B) = _array_reserve(B, N, sizeof(*(B))))
+#define array_resize(B, N) ((B) = _array_reserve(B, N, sizeof(*(B))), _array_header(B)->_size = (N))
 #define array_clear(B) ((B) ? _array_header(B)->_size = 0 : 0)
 #define array_end(B) ((B) ? (B) + _array_header(B)->_size : 0)
 
@@ -121,7 +125,6 @@ struct _array_header_t
 
 static inline void* _array_reserve(void* b, size_t capacity, size_t size)
 {
-    /*
     struct _array_header_t* header = b ? _array_header(b) : NULL;
 
     if (header && capacity <= header->_capacity)
@@ -150,8 +153,8 @@ static inline void* _array_reserve(void* b, size_t capacity, size_t size)
         assert(!"array.h:_reserve out of memory.");
         return NULL;
     }
-    */
 
+    /*
     static const size_t array_min_capacity = 1;
 
     // @Todo: don't reserve when request capacity is inferior to the current array capacity.
@@ -177,6 +180,7 @@ static inline void* _array_reserve(void* b, size_t capacity, size_t size)
         assert(!"Out of memory.");
         return NULL;
     }
+    */
 }
 
 #endif // ARRAY_H_

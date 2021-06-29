@@ -1,12 +1,8 @@
 // Bit array data structure.
-// The implementation uses the same ideas as stretchy buffers (see 'array.h').
 //
 // =====================
 // === Documentation ===
 // =====================
-//
-// Bit arrays use the same principles as the arrays in 'array.h'.
-// Thus, to use an array simply declare a `bitarray_t` pointer, set it to `NULL` and you're ready to go.
 //
 // The following schemas describe the array format:
 //
@@ -84,12 +80,6 @@
 // Frees any memory tied to the array and set the array variable to `NULL` so that it is ready to be reused.
 //
 // =====================
-// ===   Warnings    ===
-// =====================
-//
-// - The API is macro based, so be aware of side effects.
-//
-// =====================
 // ===     Notes     ===
 // =====================
 //
@@ -101,215 +91,223 @@
 // =====================
 //
 // ```c
-// bitarray_t* ba = NULL;
+// bitarray_t ba = {0};
 //
-// bitarray_resize(ba, 6);  // Resize the array to 6 bits.
+// bitarray_resize(&ba, 6);  // Resize the array to 6 bits.
 //
-// bitarray_setbit(ba, 0);  // 100000
-// bitarray_setbit(ba, 4);  // 100010
-// bitarray_clearbit(ba, 0);// 0000101
+// bitarray_setbit(&ba, 0);  // 100000
+// bitarray_setbit(&ba, 4);  // 100010
+// bitarray_clearbit(&ba, 0);// 0000101
 //
-// bitarray_push(ba, 1);    // 1000101, size is now 7 bits.
+// bitarray_push(&ba, 1);    // 1000101, size is now 7 bits.
 //
 // // Push 16 bits of data to the array starting with the lsb of the data.
-// size_t data_index = bitarray_size(ba);
+// size_t data_index = ba.size;
 // uint16_t bit_data = 23781; // Some random data.
-// bitarray_push_bits_lsb(ba, bit_data, 16);
+// bitarray_push_bits_lsb(&ba, bit_data, 16);
 //
 // // Partially retrieved the data. 11 bits out of the 16.
-// uint16_t retrieved_data = bitarray_bits_lsb(ba, data_index, 11);
+// uint16_t retrieved_data = bitarray_bits_lsb(&ba, data_index, 11);
 //
-// bitarray_free(ba);
+// bitarray_free(&ba);
 // ```
 
 #ifndef BITARRAY_H_
 #define BITARRAY_H_
 
-#include <assert.h>
-#include <stddef.h> // offsetof
-#include <stdint.h>
-#include <stdlib.h> // realloc, free
+#include "array.h"
 
 // Public API.
 
-typedef uint8_t bitarray_t;
+typedef struct bitarray_t bitarray_t;
 
-#define bitarray_size(B) ((B) ? _bitarray_header(B)->_size : 0)
-#define bitarray_capacity(B) ((B) ? _bitarray_header(B)->_bytes_allocated * 8 : 0)
-
-#define bitarray_reserve(B, N) ((B) = _bitarray_reserve((B), (N))->_buf)
-#define bitarray_resize(B, N) (bitarray_reserve(B, N), _bitarray_header(B)->_size = (N))
-#define bitarray_free(B) ((B) ? free(_bitarray_header(B)) : 0, (B) = NULL)
-
-#define bitarray_clear(B) ((B) ? _bitarray_header(B)->_size = 0 : 0)
-#define bitarray_push(B, X) ((B) = _bitarray_push(B, X)->_buf)
-#define bitarray_push_bits_lsb(B, X, N) ((B) = _bitarray_push_bits_lsb(B, X, N)->_buf)
-#define bitarray_push_bits_msb(B, X, N) ((B) = _bitarray_push_bits_msb(B, X, N)->_buf)
-
-#define bitarray_setbit(B, I) _bitarray_setbit(B, I)
-#define bitarray_clearbit(B, I) _bitarray_clearbit(B, I)
-
-#define bitarray_bit(B, I) _bitarray_bit(B, I)
-#define bitarray_bits_lsb(B, I, N) _bitarray_bits_lsb(B, I, N)
-#define bitarray_bits_msb(B, I, N) _bitarray_bits_msb(B, I, N)
-
-#define bitarray_to_byte_array(B)
-#define bitarray_from_byte_array(B, A)
-
-// -----------------------------------------------------------------------------
-// Implementation details.
-// -----------------------------------------------------------------------------
-
-struct _bitarray_header_t
+struct bitarray_t
 {
-    size_t _size;               // Number of bits.
-    size_t _bytes_allocated;    // Number of bytes in the allocation.
-    uint8_t _buf[];             // Actual array of uint8_t where bits are stored.
+    size_t size;    // Number of bits.
+    uint8_t* data;  // Array (from array.h) where the bits are stored.
 };
 
-#define _bitarray_header(B) ((struct _bitarray_header_t*)((char*)(B) - offsetof(struct _bitarray_header_t, _buf)))
+static inline void bitarray_reserve(bitarray_t*, size_t num_bits);
+static inline void bitarray_resize(bitarray_t*, size_t num_bits);
+static inline void bitarray_free(bitarray_t*);
 
-static inline struct _bitarray_header_t* _bitarray_reserve(void* b, size_t num_bits)
-{
-    struct _bitarray_header_t* header = b ? _bitarray_header(b) : NULL;
+static inline void bitarray_clear(bitarray_t*);
+static inline void bitarray_push(bitarray_t*, uint8_t bit);
+static inline void bitarray_push_bits_lsb(bitarray_t*, uint64_t bits, size_t n);
+static inline void bitarray_push_bits_msb(bitarray_t*, uint64_t bits, size_t n);
 
-    const size_t bytes_required = (num_bits + 7) / 8; // Ceiling operation.
+static inline void bitarray_setbit(bitarray_t*, size_t index);
+static inline void bitarray_clearbit(bitarray_t*, size_t index);
 
-    if (header && bytes_required <= header->_bytes_allocated)
-    {
-        // There is already enough place for the number of bits asked.
-        return header;
-    }
+static inline uint8_t bitarray_bit(const bitarray_t*, size_t index);
+static inline uint64_t bitarray_bits_lsb(const bitarray_t*, size_t index, size_t n);
+static inline uint64_t bitarray_bits_msb(const bitarray_t*, size_t index, size_t n);
 
-    // Ensure at least 1 byte is allocated. We don't want any problems when 0 bits are asked.
-    const size_t real_bytes_required = bytes_required == 0 ? 1 : bytes_required;
-    const size_t alloc_size = real_bytes_required + sizeof(struct _bitarray_header_t);
-    header = realloc(header, alloc_size);
+static inline void bitarray_pad_last_byte(bitarray_t*);
 
-    if (header)
-    {
-        if (!b)
-        {
-            // This is the first allocation.
-
-            header->_size = 0;
-        }
-
-        header->_bytes_allocated = real_bytes_required;
-        return header;
-    }
-    else
-    {
-        assert(!"bitarray:_reserve out of memory.");
-        return NULL;
-    }
-}
+// Implementation details.
 
 // Push a bit without any verifications.
-static inline void _bitarray_push_raw(struct _bitarray_header_t* header, uint8_t bit)
+static inline void _bitarray_push_raw(bitarray_t* ba, uint8_t bit)
 {
-    size_t byte_index = header->_size / 8;
-    size_t rel_bit_index = header->_size & 7;
-    header->_buf[byte_index] &= ~(1 << rel_bit_index);
-    header->_buf[byte_index] |= ((bit & 0x1) << rel_bit_index);
-    header->_size++;
+    size_t byte_index = ba->size / 8;
+    size_t rel_bit_index = ba->size & 7;
+    ba->data[byte_index] &= ~(1 << rel_bit_index); // We need to clear the bit first.
+    ba->data[byte_index] |= ((bit & 0x1) << rel_bit_index);
+    ba->size++;
 }
 
-static inline struct _bitarray_header_t* _bitarray_push(void* b, uint8_t bit)
+static inline void bitarray_reserve(bitarray_t* ba, size_t num_bits)
 {
-    struct _bitarray_header_t* header = b ? _bitarray_header(b) : NULL;
-    size_t size = bitarray_size(b);
+    assert(ba);
 
-    if (!header || size == header->_bytes_allocated * 8)
-    {
-        header = _bitarray_reserve(b, 2 * size);
-    }
-
-    _bitarray_push_raw(header, bit);
-
-    return header;
+    const size_t bytes_required = (num_bits + 7) / 8; // Ceiling operation.
+    array_reserve(ba->data, bytes_required);
 }
 
-static inline struct _bitarray_header_t* _bitarray_push_bits_lsb(void* b, uint64_t bits, size_t n)
+static inline void bitarray_resize(bitarray_t* ba, size_t num_bits)
 {
-    struct _bitarray_header_t* header = b ? _bitarray_header(b) : NULL;
-    size_t size = bitarray_size(b);
+    assert(ba);
 
-    if (!header || size + n >= header->_bytes_allocated * 8)
+    const size_t bytes_required = (num_bits + 7) / 8 + 1; // Ceiling operation.
+    array_resize(ba->data, bytes_required);
+    ba->size = num_bits;
+}
+
+static inline void bitarray_free(bitarray_t* ba)
+{
+    assert(ba);
+
+    array_free(ba->data);
+    ba->size = 0;
+    ba->data = NULL;
+}
+
+static inline void bitarray_clear(bitarray_t* ba)
+{
+    assert(ba);
+
+    array_clear(ba->data);
+    ba->size = 0;
+}
+
+static inline void bitarray_push(bitarray_t* ba, uint8_t bit)
+{
+    assert(ba);
+
+    size_t bytes_allocated = array_size(ba->data);
+
+    if (ba->size == bytes_allocated * 8)
     {
-        header = _bitarray_reserve(b, size + n);
+        array_reserve(ba->data, 2 * bytes_allocated);
     }
+
+    // Update the array size.
+    if (ba->size / 8 >= array_size(ba->data)) array_resize(ba->data, ba->size / 8 + 1);
+
+    _bitarray_push_raw(ba, bit);
+}
+
+static inline void bitarray_push_bits_lsb(bitarray_t* ba, uint64_t bits, size_t n)
+{
+    assert(ba);
+
+    size_t bytes_allocated = array_size(ba->data);
+
+    if (ba->size + n >= bytes_allocated * 8)
+    {
+        array_reserve(ba->data, ba->size + n);
+    }
+
+    // Update the array size.
+    if ((ba->size + n) / 8 >= array_size(ba->data)) array_resize(ba->data, (ba->size + n) / 8 + 1);
 
     for (size_t i = 0; i < n; ++i)
     {
-        _bitarray_push_raw(header, bits >> i);
+        _bitarray_push_raw(ba, bits >> i);
     }
-
-    return header;
 }
 
-static inline struct _bitarray_header_t* _bitarray_push_bits_msb(void* b, uint64_t bits, size_t n)
+static inline void bitarray_push_bits_msb(bitarray_t* ba, uint64_t bits, size_t n)
 {
-    struct _bitarray_header_t* header = b ? _bitarray_header(b) : NULL;
-    size_t size = bitarray_size(b);
+    assert(ba);
 
-    if (!header || size + n >= header->_bytes_allocated * 8)
+    size_t bytes_allocated = array_size(ba->data);
+
+    if (ba->size + n >= bytes_allocated * 8)
     {
-        header = _bitarray_reserve(b, size + n);
+        array_reserve(ba->data, ba->size + n);
     }
+
+    // Update the array size.
+    if ((ba->size + n) / 8 >= array_size(ba->data)) array_resize(ba->data, (ba->size + n) / 8 + 1);
 
     for (size_t i = 0; i < n; ++i)
     {
-        _bitarray_push_raw(header, bits >> (n - i - 1));
+        _bitarray_push_raw(ba, bits >> (n - i - 1));
     }
-
-    return header;
 }
 
-static inline void _bitarray_setbit(void* b, size_t index)
+static inline void bitarray_setbit(bitarray_t* ba, size_t index)
 {
-    assert(index < bitarray_size(b) && "bitarray:setbit index out of bounds.");
-    _bitarray_header(b)->_buf[index / 8] |= (1 << (index & 7));
+    assert(ba);
+    assert(index < ba->size && "bitarray:setbit index out of bounds.");
+    ba->data[index / 8] |= (1 << (index & 7));
 }
 
-static inline void _bitarray_clearbit(void* b, size_t index)
+static inline void bitarray_clearbit(bitarray_t* ba, size_t index)
 {
-    assert(index < bitarray_size(b) && "bitarray:clearbit index out of bounds.");
-    _bitarray_header(b)->_buf[index / 8] &= ~(1 << (index & 7));
+    assert(ba);
+    assert(index < ba->size && "bitarray:clearbit index out of bounds.");
+    ba->data[index / 8] &= ~(1 << (index & 7));
 }
 
-static inline uint8_t _bitarray_bit(const void* b, size_t index)
+static inline uint8_t bitarray_bit(const bitarray_t* ba, size_t index)
 {
-    assert(index < bitarray_size(b) && "bitarray:bit index out of bounds.");
-    return (_bitarray_header(b)->_buf[index / 8] >> (index & 7)) & 0x1;
+    assert(ba);
+    assert(index < ba->size && "bitarray:bit index out of bounds.");
+    return (ba->data[index / 8] >> (index & 7)) & 0x1;
 }
 
-static inline uint64_t _bitarray_bits_lsb(const void* b, size_t index, size_t n)
+static inline uint64_t bitarray_bits_lsb(const bitarray_t* ba, size_t index, size_t n)
 {
-    assert(index + n <= bitarray_size(b) && "bitarray:bits_lsb range out of bounds.");
+    assert(ba);
+    assert(index + n <= ba->size && "bitarray:bits_lsb range out of bounds.");
     assert(n < 64 && "bitarray:bits_lsb can read at most 64 bits.");
 
     uint64_t bits = 0;
     for (size_t i = 0; i < n; ++i)
     {
-        bits |= (bitarray_bit(b, index + i) << i);
+        bits |= (bitarray_bit(ba, index + i) << i);
     }
 
     return bits;
 }
 
-static inline uint64_t _bitarray_bits_msb(const void* b, size_t index, size_t n)
+static inline uint64_t bitarray_bits_msb(const bitarray_t* ba, size_t index, size_t n)
 {
-    assert(index + n <= bitarray_size(b) && "bitarray:bits_msb range out of bounds.");
+    assert(ba);
+    assert(index + n <= ba->size && "bitarray:bits_msb range out of bounds.");
     assert(n < 64 && "bitarray:bits_msb can read at most 64 bits.");
 
     uint64_t bits = 0;
     for (size_t i = 0; i < n; ++i)
     {
-        bits |= (bitarray_bit(b, index + i) << (n - i - 1));
+        bits |= (bitarray_bit(ba, index + i) << (n - i - 1));
     }
 
     return bits;
+}
+
+static inline void bitarray_pad_last_byte(bitarray_t* ba)
+{
+    assert(ba);
+
+    size_t rel_bit_index = ba->size & 7;
+
+    if (rel_bit_index == 0) return;
+
+    bitarray_push_bits_lsb(ba, 0, 8 - rel_bit_index);
 }
 
 #endif // BITARRAY_H_
