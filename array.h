@@ -22,7 +22,7 @@
 //
 // `array_push(array, element) -> (void)`
 // Append a new `element` at the end of the array. If the array doesn't have enough storage
-// then the array is reallocated.
+// then the array is reallocated and any pointer is invalidated.
 //
 // `array_pop(array) -> (void)`
 // Removes the last element from the array.
@@ -33,10 +33,11 @@
 //
 // `array_reserve(array, size) -> (void)`
 // Resize the array storage so that it can hold at least `size` elements without the need
-// of being resized.
+// of being resized. Pointers to the array are invalidated.
 //
 // `array_resize(array, size) -> (void)`
 // Resize the array storage and set the array size to the specified value. Elements are uninitialized.
+// Pointers to the array are invalidated.
 //
 // `array_clear(array) -> (void)`
 // Removes all elements from the array leaving it with a size of 0. This does not skrink
@@ -98,7 +99,7 @@
     #define array_at(B, I) (B)                                                          \
         ? (assert((I) >= 0 && (I) < array_size(B) && "Array out of bounds."), (B)[(I)]) \
         : (assert(!"Array is NULL."), 0)
-    #define array_remove_fast(B, I) ((B)                                \
+    #define array_remove_fast(B, I) ((B)                                                \
         ? (assert((I) >= 0 && (I) < array_size(B) && "Array out of bounds."),           \
           (B)[I] = (B)[_array_header(B)->_size - 1])                                    \
         : assert(!"Array is NULL.")
@@ -121,6 +122,8 @@ struct _array_header_t
 #define _array_header(B) ((struct _array_header_t*)((char*)(B) - offsetof(struct _array_header_t, _buf)))
 #define _array_is_full(B) (array_size(B) == array_capacity(B))
 // The array is set to double its storage whenever a reallocation must be performed.
+// @Todo: this is the growth sequence used by some implementations of std::vector https://oeis.org/A061418
+// https://stackoverflow.com/questions/5232198/about-vectors-growth
 #define _array_fit(B) (_array_is_full(B) ? ((B) = _array_reserve(B, 2 * array_capacity(B), sizeof(*(B)))) : 0)
 
 static inline void* _array_reserve(void* b, size_t capacity, size_t size)
@@ -153,34 +156,6 @@ static inline void* _array_reserve(void* b, size_t capacity, size_t size)
         assert(!"array.h:_reserve out of memory.");
         return NULL;
     }
-
-    /*
-    static const size_t array_min_capacity = 1;
-
-    // @Todo: don't reserve when request capacity is inferior to the current array capacity.
-
-    const size_t new_capacity = b ? capacity : array_min_capacity;
-    const size_t alloc_size = new_capacity * size + sizeof(struct _array_header_t);
-
-    struct _array_header_t* header = realloc(b ? _array_header(b) : NULL, alloc_size);
-
-    if (header)
-    {
-        if (!b)
-        {
-            header->_size = 0;
-        }
-
-        header->_capacity = new_capacity;
-
-        return header->_buf;
-    }
-    else
-    {
-        assert(!"Out of memory.");
-        return NULL;
-    }
-    */
 }
 
 #endif // ARRAY_H_

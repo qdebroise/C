@@ -169,7 +169,7 @@ static inline void bitarray_resize(bitarray_t* ba, size_t num_bits)
 {
     assert(ba);
 
-    const size_t bytes_required = (num_bits + 7) / 8 + 1; // Ceiling operation.
+    const size_t bytes_required = (num_bits + 7) / 8; // Ceiling operation.
     array_resize(ba->data, bytes_required);
     ba->size = num_bits;
 }

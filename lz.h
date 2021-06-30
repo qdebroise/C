@@ -24,6 +24,6 @@ uint8_t* lzss_compress(const uint8_t* data, size_t size);
 // The returned value is an array and *MUST* be freed when it is no longer needed (see `array.h:array_free()`).
 uint8_t* lzss_uncompress(const uint8_t* compressed_data, size_t size);
 
-#endif // L2_H_
+#endif // LZ_H_
 
 

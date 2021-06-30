@@ -1,52 +1,7 @@
-// LZ77 is a lossless dictionary based compression algorithm using a sliding window.
+// References:
+//  - https://courses.cs.duke.edu//spring03/cps296.5/papers/ziv_lempel_1977_universal_algorithm.pdf
+//  - http://michael.dipperstein.com/lzss/
 //
-// == References ==
-//
-// - https://courses.cs.duke.edu//spring03/cps296.5/papers/ziv_lempel_1977_universal_algorithm.pdf
-// - https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-wusp/fb98aa28-5cd7-407f-8869-a6cef1ff1ccb?redirectedfrom=MSDN
-// - https://web.stanford.edu/class/ee376a/files/irena_lecture.pdf
-// - http://jens.quicknote.de/comp/LZ77-JensMueller.pdf
-// - http://michael.dipperstein.com/lzss/
-//
-// == Algorithm ==
-//
-// The LZ77 algorithm works by replacing uncompressed sequences by references to identical sequences that has already been
-// compressed. The reference is a triplet with a backward offset indicating the position of the sequence already observed from
-// the current position in the uncompressed stream, the length of the sequence and the next first character that isn't matching the sequence.
-//
-// The algorithm uses a sliding window that is composed of two parts. The left side of the sliding window is the search buffer. It contains
-// data from the uncompressed stream that has already been compressed. It is the search buffer that is analyzed to find already seen sequences
-// and replace them with a reference. The right part of the sliding window is the look-ahead buffer and it contains uncompressed data that
-// hasn't been read yet. The sliding window is of fixed size but the two parts aren't necessarily of the same size.
-//
-// ---
-//
-// The sliding window is divided into two parts: the search buffer and the look-ahead buffer.
-// The look-ahead buffer contains the next visible bytes in the input to be encoded.
-// The search buffer is a memory of the input bytes already encoded.
-//
-// The emitted triplet is on 24 bits (3 bytes). A full byte is dedicated to the next character.
-// This leaves 16 bits to encode both the backward offset and the match length.
-// The repartition is as follows, 12 bits for the backward offset and 4 bits for the match length. This
-// gives us a search window of 2^12 = 4096 bytes and a maximum match length of 2^4 = 16 bytes.
-//
-// +-------+----+
-// |       |abra|cadabra        -> (0, 0, a) -> a
-//
-//  +-------+----+
-//  |      a|brac|adabra        -> (0, 0, b) -> b
-//
-//   +-------+----+
-//   |     ab|raca|dabra        -> (0, 0, r) -> r
-//
-//    +-------+----+
-//    |    abr|acad|abra        -> (3, 1, c) -> ac // First symbol sequence found in the dictionnary.
-//
-//      +-------+----+
-//      |  abrac|adab|ra        -> (2, 1, d) -> ad // Go to the closest 'a' character in the dictionnary.
-//
-//        +-------+----+
-//        |abracad|abra|        -> (7, 4, NULL) -> abra
 
 #include "lz.h"
 
@@ -113,8 +68,42 @@ static void _find_prefix(
 // =====================
 // ===     LZ77      ===
 // =====================
+//
+// == Algorithm ==
+//
+// LZ77 is a lossless dictionary based compression algorithm using a sliding window.
+//
+// The LZ77 algorithm works by replacing uncompressed sequences by references to identical sequences already observed and compressed.
+//
+// The sliding window is divided into two parts: the search buffer and the look-ahead buffer.
+// The look-ahead buffer contains the next visible bytes in the input to be encoded.
+// The search buffer is a memory of the input bytes already encoded.
+//
+// The emitted triple is on 24 bits (3 bytes). A full byte is dedicated to the next character.
+// This leaves 16 bits to encode both the backward offset and the match length.
+// The repartition is as follows, 12 bits for the backward offset and 4 bits for the match length. This
+// gives us a search window of 2^12 = 4096 bytes and a maximum match length of 2^4 = 16 bytes.
+//
+// +-------+----+
+// |       |abra|cadabra        -> (0, 0, a) -> a
+//
+//  +-------+----+
+//  |      a|brac|adabra        -> (0, 0, b) -> b
+//
+//   +-------+----+
+//   |     ab|raca|dabra        -> (0, 0, r) -> r
+//
+//    +-------+----+
+//    |    abr|acad|abra        -> (3, 1, c) -> ac // First symbol sequence found in the dictionnary.
+//
+//      +-------+----+
+//      |  abrac|adab|ra        -> (2, 1, d) -> ad // Go to the closest 'a' character in the dictionnary.
+//
+//        +-------+----+
+//        |abracad|abra|        -> (7, 4, NULL) -> abra
 
-static void _emit_triplet(uint8_t** compressed_data, size_t offset, size_t length, uint8_t next_byte)
+
+static void _emit_triple(uint8_t** compressed_data, size_t offset, size_t length, uint8_t next_byte)
 {
     assert(offset <= SEARCH_BUFFER_SIZE);
     assert(length <= LOOK_AHEAD_BUFFER_SIZE);
@@ -159,15 +148,15 @@ uint8_t* lz77_compress(const uint8_t* data, size_t size)
 
         if (match_length == 0)
         {
-            _emit_triplet(&compressed_data, 0, 0, *current);
+            _emit_triple(&compressed_data, 0, 0, *current);
         }
         else
         {
             // The match offset must be backward from the end of the search buffer.
             match_offset = search_buffer_content_size - match_offset;
-            // If we reached the end of the data stream then the next byte in the triplet is NULL.
+            // If we reached the end of the data stream then the next byte in the triple is NULL.
             uint8_t next_byte = current + match_length == current + size ? 0 : current[match_length];
-            _emit_triplet(&compressed_data, match_offset, match_length, next_byte);
+            _emit_triple(&compressed_data, match_offset, match_length, next_byte);
         }
 
         index += match_length + 1;
@@ -189,7 +178,7 @@ uint8_t* lz77_uncompress(const uint8_t* compressed_data, size_t size)
         uint16_t length = combined & (LOOK_AHEAD_BUFFER_SIZE - 1);
 
         // We reserve the required space up front. We cannot rely on `array_push()` to
-        // reserve memory as it modifies the `data` pointer and thus invalidates `it` and `end`.
+        // reserve memory as it can modifiy the `data` pointer and thus invalidates `it` and `end`.
         array_reserve(data, array_size(data) + length);
 
         const uint8_t* it = data + array_size(data) - offset;
@@ -209,10 +198,25 @@ uint8_t* lz77_uncompress(const uint8_t* compressed_data, size_t size)
 // =====================
 // ===     LZSS      ===
 // =====================
+//
+// LZSS is an amelioration of LZ77 with the following improvements:
+//
+// LZSS uses a single bit to determine wether the following symbol is a single character or a pair,length distance.
+// This allows to save quite a bit of memory as we no longer need to store a full triple when no matches were found.
+//
+// LZSS prohibe matches with a length smaller than 3. Indeed if we need 1 bit to determine the type of what follows
+// in the stream and a character is a byte on 8 bits. Then we can easily see that:
+// - A match of length N uses '1*N + 8*N' bits if coded as a sequence of single characters.
+// - A match of length N uses '1 + 3*8' bits if coded as a distance,length pair.
+// Thus we have the following table:
+//
+// Match Length     Coded as characters     Coded as distance,length pair
+//      1                   9                           25
+//      2                   18                          25
+//      3                   27                          25
+//
+// Therefore matches with a length lower than take less space when coded as single characters.
 
-// Match length 1 -> 1b + 3*8b = 25b VS 1*9b = 9b       25 - 9  Bad
-// Match length 2 -> 1b + 3*8b = 25b VS 2*9b = 18b      25 - 18 Bad
-// Match length 3 -> 1b + 3*8b = 25b VS 2*9b = 27b      25 - 27 Good -> start encoding pair <length, offset> when match length is at least 3 caracters long.
 #define LZSS_MIN_MATCH_LENGTH 3
 
 uint8_t* lzss_compress(const uint8_t* data, size_t size)
@@ -291,7 +295,7 @@ uint8_t* lzss_uncompress(const uint8_t* compressed_data, size_t size)
             i += 17;
 
             // We reserve the required space up front. We cannot rely on `array_push()` to
-            // reserve memory as it modifies the `data` pointer and thus invalidates `it` and `end`.
+            // reserve memory as it can modifiy the `data` pointer and thus invalidates `it` and `end`.
             array_reserve(data, array_size(data) + length);
 
             const uint8_t* it = data + array_size(data) - offset;
@@ -305,77 +309,4 @@ uint8_t* lzss_uncompress(const uint8_t* compressed_data, size_t size)
     }
 
     return data;
-}
-
-
-#include <stdio.h>
-#include <time.h> // very basic and undersimplified timing.
-
-// https://go-compression.github.io/algorithms/lzss/
-// https://gist.github.com/fogus/5401265
-// https://github.com/cstdvd/lz77
-
-int main(int argc, char* argv[])
-{
-    // static const char str[] = "abcabcabcabc";
-    // static const char str[] = "abracadabra";
-    // static const char str[] = "les chaussettes de l'archiduchesse sont elles seches archiseches.";
-    // static const char str[] = "aacaacabcabaaac";
-    // static const size_t size = sizeof(str) / sizeof(str[0]);
-
-    FILE* f = fopen("bible.txt", "rb");
-    if (!f) return 1;
-    fseek(f, 0, SEEK_END);
-    size_t end = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    uint8_t* content = malloc(end);
-    fread(content, 1, end, f);
-    fclose(f);
-
-    clock_t tic, toc;
-
-    tic = clock();
-    uint8_t* lz77_compressed_data = lz77_compress(content, end);
-    toc = clock();
-    float lz77_compression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
-
-    tic = clock();
-    uint8_t* lz77_uncompressed_data = lz77_uncompress(lz77_compressed_data, array_size(lz77_compressed_data));
-    toc = clock();
-    float lz77_uncompression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
-
-    tic = clock();
-    uint8_t* lzss_compressed_data = lzss_compress(content, end);
-    toc = clock();
-    float lzss_compression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
-
-    tic = clock();
-    uint8_t* lzss_uncompressed_data = lzss_uncompress(lzss_compressed_data, array_size(lzss_compressed_data));
-    toc = clock();
-    float lzss_uncompression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
-
-    printf("LZ77:\n\tCompression rate (%%): %.3f\n\tCompression time (s): %f\n\tUncompression time (s): %f\n",
-            (1 - array_size(lz77_compressed_data) / (float)array_size(lz77_uncompressed_data)) * 100,
-            lz77_compression_time_s, lz77_uncompression_time_s);
-    printf("LZSS:\n\tCompression rate (%%): %.3f\n\tCompression time (s): %f\n\tUncompression time (s): %f\n",
-            (1 - array_size(lzss_compressed_data) / (float)array_size(lzss_uncompressed_data)) * 100,
-            lzss_compression_time_s, lzss_uncompression_time_s);
-
-    /*
-    printf("LZSS compressed data stream:\n");
-    for (int i = 0; i < array_size(lzss_compressed_data); ++i)
-    {
-        printf("0x%x ", lzss_compressed_data[i]);
-    }
-    printf("\nCompressed size: %lu bytes\n\n", array_size(lzss_compressed_data));
-
-    printf("Uncompressed data stream:\n");
-    for (uint8_t* byte = lzss_uncompressed_data; byte < lzss_uncompressed_data + array_size(lzss_uncompressed_data); ++byte)
-    {
-        printf("%c", *byte);
-    }
-    printf("\nUncompressed size: %lu bytes\n", array_size(lzss_uncompressed_data));
-    */
-
-    return 0;
 }
