@@ -10,13 +10,14 @@
 
 int main(int argc, char* argv[])
 {
-    // static const char str[] = "abcabcabcabc";
-    // static const char str[] = "abracadabra";
-    // static const char str[] = "les chaussettes de l'archiduchesse sont elles seches archiseches.";
-    // static const char str[] = "aacaacabcabaaac";
-    // static const size_t size = sizeof(str) / sizeof(str[0]);
+    // static const char content[] = "abcabcabcabc";
+    // static const char content[] = "abracadabra";
+    // static const char content[] = "les chaussettes de l'archiduchesse sont elles seches archiseches.";
+    // static const char content[] = "aacaacabcabaaac";
+    // static const size_t end = sizeof(content) / sizeof(content[0]);
 
     FILE* f = fopen("test/bible.txt", "rb");
+    // FILE* f = fopen("bitarray.h", "rb");
     if (!f) return 1;
     fseek(f, 0, SEEK_END);
     size_t end = ftell(f);
@@ -27,21 +28,25 @@ int main(int argc, char* argv[])
 
     clock_t tic, toc;
 
+    printf("Start LZ77 compression\n");
     tic = clock();
     uint8_t* lz77_compressed_data = lz77_compress(content, end);
     toc = clock();
     float lz77_compression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
 
+    printf("Start LZ77 decompression\n");
     tic = clock();
     uint8_t* lz77_uncompressed_data = lz77_uncompress(lz77_compressed_data, array_size(lz77_compressed_data));
     toc = clock();
     float lz77_uncompression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
 
+    printf("Start LZSS compression\n");
     tic = clock();
     uint8_t* lzss_compressed_data = lzss_compress(content, end);
     toc = clock();
     float lzss_compression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
 
+    printf("Start LZSS decompression\n");
     tic = clock();
     uint8_t* lzss_uncompressed_data = lzss_uncompress(lzss_compressed_data, array_size(lzss_compressed_data));
     toc = clock();
@@ -56,7 +61,7 @@ int main(int argc, char* argv[])
 
     /*
     printf("LZSS compressed data stream:\n");
-    for (int i = 0; i < array_size(lzss_compressed_data); ++i)
+    for (size_t i = 0; i < array_size(lzss_compressed_data); ++i)
     {
         printf("0x%x ", lzss_compressed_data[i]);
     }
