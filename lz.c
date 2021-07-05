@@ -24,6 +24,87 @@ static inline size_t min(size_t a, size_t b)
     return a < b ? a : b;
 }
 
+// Find with linked list
+typedef struct node_t
+{
+    size_t index; // Global index in the stream.
+    struct node_t* next; // Linked list next.
+} node_t;
+
+typedef struct compression_context_t
+{
+    node_t nodes_pool[2 * SEARCH_BUFFER_SIZE];
+    node_t* available[2 * SEARCH_BUFFER_SIZE];
+    size_t num_nodes_available;
+    node_t* start_table[256];
+} compression_context_t;
+
+void add_start_table(compression_context_t* ctx, uint8_t byte, size_t index)
+{
+    assert(ctx->num_nodes_available > 0);
+
+    node_t* node = ctx->available[--ctx->num_nodes_available];
+
+    node->index = index;
+    node->next = ctx->start_table[byte];
+    ctx->start_table[byte] = node;
+}
+
+// https://stackoverflow.com/questions/62104581/lz77-optimization
+void _find_prefix_linked_list(
+        compression_context_t* ctx,
+        size_t index,
+        const uint8_t* pattern, size_t pattern_size,
+        const uint8_t* str, size_t str_size,
+        size_t* match_offset, size_t* match_length)
+{
+    node_t* current = ctx->start_table[pattern[0]];
+
+    size_t best_match_offset = 0;
+    size_t best_match_length = 0;
+
+    size_t sb_index = index - str_size;
+
+    while (current && index - current->index - 1 < SEARCH_BUFFER_SIZE)
+    {
+        size_t length = 1;
+        while (pattern[length] == str[current->index - sb_index + length] && length < pattern_size - 1)
+        {
+            ++length;
+        }
+
+        if (length > best_match_length)
+        {
+            best_match_length = length;
+            best_match_offset = current->index;
+        }
+
+        node_t* next = current->next;
+
+        // Remove nodes that fall outside the search window.
+        if (next && index - next->index - 1 >= SEARCH_BUFFER_SIZE)
+        {
+            current->next = NULL;
+
+            node_t* tmp = next;
+            while (tmp)
+            {
+                node_t* x = tmp->next;
+                tmp->index = 0;
+                tmp->next = NULL;
+                ctx->available[ctx->num_nodes_available++] = tmp;
+                tmp = x;
+            }
+            break;
+        }
+
+        current = next;
+    }
+
+    *match_offset = best_match_offset;
+    *match_length = best_match_length;
+}
+
 // Find the longest prefix of `pattern` into `str`. This is a brute force method in O(n*m).
 //
 // @Note: this is designed for the LZ77 algorithm and cannot be reused as is externally.
@@ -123,6 +204,17 @@ uint8_t* lz77_compress(const uint8_t* data, size_t size)
 {
     uint8_t* compressed_data = NULL; // Array.
 
+    compression_context_t ctx = {
+        .nodes_pool = {0},
+        .available = {0},
+        .start_table = {0},
+        .num_nodes_available = 2 * SEARCH_BUFFER_SIZE,
+    };
+    for (size_t i = 0; i < ctx.num_nodes_available; ++i)
+    {
+        ctx.available[i] = &ctx.nodes_pool[i];
+    }
+
     size_t index = 0;
     while (index < size)
     {
@@ -143,18 +235,27 @@ uint8_t* lz77_compress(const uint8_t* data, size_t size)
         const uint8_t* search_buffer_ptr = current - search_buffer_content_size;
 
         size_t match_offset, match_length;
-        _find_prefix(current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
+        // _find_prefix(current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
+        _find_prefix_linked_list(&ctx, index, current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
 
         if (match_length == 0)
         {
             _emit_triple(&compressed_data, 0, 0, *current);
+            add_start_table(&ctx, *current, index);
         }
         else
         {
+            for (int i = 0; i < match_length; ++i)
+            {
+                add_start_table(&ctx, current[i], index + i);
+            }
+
             // The match offset must be backward from the end of the search buffer.
-            match_offset = search_buffer_content_size - match_offset;
+            // match_offset = search_buffer_content_size - match_offset;
+            match_offset = index - match_offset - 1;
             // If we reached the end of the data stream then the next byte in the triple is NULL.
             uint8_t next_byte = current + match_length == current + size ? 0 : current[match_length];
+            add_start_table(&ctx, next_byte, index + match_length);
             _emit_triple(&compressed_data, match_offset, match_length, next_byte);
         }
 
@@ -225,6 +326,17 @@ uint8_t* lzss_compress(const uint8_t* data, size_t size)
     size_t flags_index = 0;
     uint8_t flag_count = 0;
 
+    compression_context_t ctx = {
+        .nodes_pool = {0},
+        .available = {0},
+        .start_table = {0},
+        .num_nodes_available = 2 * SEARCH_BUFFER_SIZE,
+    };
+    for (size_t i = 0; i < ctx.num_nodes_available; ++i)
+    {
+        ctx.available[i] = &ctx.nodes_pool[i];
+    }
+
     size_t index = 0;
     while (index < size)
     {
@@ -245,20 +357,27 @@ uint8_t* lzss_compress(const uint8_t* data, size_t size)
         const uint8_t* search_buffer_ptr = current - search_buffer_content_size;
 
         size_t match_offset, match_length;
-        _find_prefix(current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
+        // _find_prefix(current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
+        _find_prefix_linked_list(&ctx, index, current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
 
         if (match_length < LZSS_MIN_MATCH_LENGTH)
         {
             // Flags are initialized to 0 so nothing to change in there.
             flag_count++;
             array_push(output, *current);
+            add_start_table(&ctx, *current, index);
 
             index += 1;
         }
         else
         {
+            for (int i = 0; i < match_length; ++i)
+            {
+                add_start_table(&ctx, current[i], index + i);
+            }
             // The match offset must be backward from the end of the search buffer.
-            match_offset = search_buffer_content_size - match_offset;
+            // match_offset = search_buffer_content_size - match_offset;
+            match_offset = index - match_offset - 1;
 
             uint16_t truncated_offset = (SEARCH_BUFFER_SIZE - 1) & match_offset; // 12 bits
             uint16_t truncated_length = (LOOK_AHEAD_BUFFER_SIZE - 1) & match_length; // 4 bits
@@ -328,3 +447,4 @@ uint8_t* lzss_uncompress(const uint8_t* compressed_data, size_t size)
 
     return data;
 }
+
