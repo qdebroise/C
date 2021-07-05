@@ -6,7 +6,6 @@
 #include "lz.h"
 
 #include "array.h"
-#include "bitarray.h"
 
 #include <assert.h>
 #include <stdbool.h>
@@ -221,7 +220,10 @@ uint8_t* lz77_uncompress(const uint8_t* compressed_data, size_t size)
 
 uint8_t* lzss_compress(const uint8_t* data, size_t size)
 {
-    bitarray_t compressed_data = {0}; // Bit array.
+    uint8_t* output = NULL;
+    array_push(output, 0);
+    size_t flags_index = 0;
+    uint8_t flag_count = 0;
 
     size_t index = 0;
     while (index < size)
@@ -247,8 +249,9 @@ uint8_t* lzss_compress(const uint8_t* data, size_t size)
 
         if (match_length < LZSS_MIN_MATCH_LENGTH)
         {
-            bitarray_push(&compressed_data, 0);
-            bitarray_push_bits_lsb(&compressed_data, *current, 8);
+            // Flags are initialized to 0 so nothing to change in there.
+            flag_count++;
+            array_push(output, *current);
 
             index += 1;
         }
@@ -259,45 +262,48 @@ uint8_t* lzss_compress(const uint8_t* data, size_t size)
 
             uint16_t truncated_offset = (SEARCH_BUFFER_SIZE - 1) & match_offset; // 12 bits
             uint16_t truncated_length = (LOOK_AHEAD_BUFFER_SIZE - 1) & match_length; // 4 bits
+            uint16_t combined = (truncated_offset << ENCODED_LENGTH_BITS) | truncated_length;
 
-            bitarray_push(&compressed_data, 1);
-            bitarray_push_bits_lsb(&compressed_data, truncated_offset, 12);
-            bitarray_push_bits_lsb(&compressed_data, truncated_length, 4);
+            uint8_t low = combined & 0x00ff;
+            uint8_t high = (combined & 0xff00) >> 8;
+
+            output[flags_index] |= (1 << flag_count++);
+            array_push(output, low);
+            array_push(output, high);
 
             index += match_length;
         }
+
+        if (flag_count == 8)
+        {
+            flags_index = array_size(output);
+            array_push(output, 0);
+            flag_count = 0;
+        }
     }
 
-    return compressed_data.data;
+    return output;
 }
 
 uint8_t* lzss_uncompress(const uint8_t* compressed_data, size_t size)
 {
     uint8_t* data = NULL; // Array.
 
-    const bitarray_t ba = {
-        .size = size * 8,
-        .data = (uint8_t*)compressed_data,
-    };
+    uint8_t flags = compressed_data[0];
+    uint8_t flag_count = 0;
 
-    for (size_t i = 0; i < ba.size;)
+    for (size_t i = 1; i < size;)
     {
-        if (bitarray_bit(&ba, i) == 0)
+        if ((flags >> flag_count) & 0x1)
         {
-            uint8_t byte = bitarray_bits_lsb(&ba, i + 1, 8);
-            array_push(data, byte);
-            i += 9;
-        }
-        else
-        {
-            uint16_t offset = bitarray_bits_lsb(&ba, i + 1, 12);
-            uint16_t length = bitarray_bits_lsb(&ba, i + 13, 4);
-            i += 17;
+            uint16_t low = compressed_data[i++];
+            uint16_t high = compressed_data[i++];
+            uint16_t combined = (high << 8) | low;
 
-            // We reserve the required space up front. We cannot rely on `array_push()` to
-            // reserve memory as it can modifiy the `data` pointer and thus invalidates `it` and `end`.
+            uint16_t offset = combined >> 4;
+            uint16_t length = combined & 0xf;
+
             array_reserve(data, array_size(data) + length);
-
             const uint8_t* it = data + array_size(data) - offset;
             const uint8_t* end = it + length;
             while (it != end)
@@ -305,6 +311,18 @@ uint8_t* lzss_uncompress(const uint8_t* compressed_data, size_t size)
                 array_push(data, *it);
                 ++it;
             }
+        }
+        else
+        {
+            uint8_t byte = compressed_data[i++];
+            array_push(data, byte);
+        }
+
+        flag_count++;
+        if (flag_count == 8)
+        {
+            flags = compressed_data[i++];
+            flag_count = 0;
         }
     }
 
