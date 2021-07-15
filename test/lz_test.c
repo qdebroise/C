@@ -75,5 +75,11 @@ int main(int argc, char* argv[])
     printf("\nUncompressed size: %lu bytes\n", array_size(lzss_uncompressed_data));
     */
 
+    array_free(lz77_compressed_data);
+    array_free(lz77_uncompressed_data);
+    array_free(lzss_compressed_data);
+    array_free(lzss_uncompressed_data);
+    free(content);
+
     return 0;
 }

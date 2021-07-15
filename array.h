@@ -138,7 +138,7 @@ static inline void* _array_reserve(void* b, size_t capacity, size_t size)
 
     // Ensure at least 1 element is allocated. We don't want any problems when 0 elements are asked.
     const size_t new_capacity = capacity == 0 ? 1 : capacity;
-    const size_t alloc_size = new_capacity * size * sizeof(struct _array_header_t);
+    const size_t alloc_size = new_capacity * size + sizeof(struct _array_header_t);
     header = realloc(header, alloc_size);
 
     if (header)

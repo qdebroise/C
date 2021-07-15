@@ -7,6 +7,7 @@
 
 #include "array.h"
 
+
 #include <assert.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -87,7 +88,7 @@ void hashtable_add_entry(compression_context_t* ctx, uint8_t byte, size_t index)
     ctx->hashtable[byte] = node;
 }
 
-void _find_prefix_linked_list(
+void _find_longest_match_linked_list(
         compression_context_t* ctx,
         size_t index,
         const uint8_t* pattern, size_t pattern_size,
@@ -105,7 +106,7 @@ void _find_prefix_linked_list(
     while (current && index - current->index - 1 < SEARCH_BUFFER_SIZE)
     {
         size_t length = 1;
-        while (pattern[length] == str[current->index - sb_index + length] && length < pattern_size - 1)
+        while (length < pattern_size - 1 && pattern[length] == str[current->index - sb_index + length])
         {
             ++length;
         }
@@ -147,7 +148,7 @@ void _find_prefix_linked_list(
 //  it will be the closest to the look-ahead buffer.
 //  - The search can go beyong `str` size to allow overlapping the look-ahead buffer. The only constraint
 //  is the match must not be longer than `pattern_size`.
-static void _find_prefix_bruteforce(
+static void _find_longest_match_bruteforce(
     const uint8_t* pattern, size_t pattern_size,
     const uint8_t* str, size_t str_size,
     size_t* match_offset, size_t* match_length)
@@ -260,8 +261,8 @@ uint8_t* lz77_compress(const uint8_t* data, size_t size)
         const uint8_t* search_buffer_ptr = current - search_buffer_content_size;
 
         size_t match_offset, match_length;
-        // _find_prefix_bruteforce(current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
-        _find_prefix_linked_list(&ctx, index, current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
+        // _find_longest_match_bruteforce(current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
+        _find_longest_match_linked_list(&ctx, index, current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
 
         if (match_length == 0)
         {
@@ -376,8 +377,8 @@ uint8_t* lzss_compress(const uint8_t* data, size_t size)
         const uint8_t* search_buffer_ptr = current - search_buffer_content_size;
 
         size_t match_offset, match_length;
-        // _find_prefix_bruteforce(current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
-        _find_prefix_linked_list(&ctx, index, current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
+        // _find_longest_match_bruteforce(current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
+        _find_longest_match_linked_list(&ctx, index, current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
 
         if (match_length < LZSS_MIN_MATCH_LENGTH)
         {
@@ -438,7 +439,7 @@ uint8_t* lzss_uncompress(const uint8_t* compressed_data, size_t size)
             uint16_t high = compressed_data[i++];
             uint16_t combined = (high << 8) | low;
 
-            uint16_t offset = combined >> 4;
+            uint16_t offset = combined >> ENCODED_LENGTH_BITS;
             uint16_t length = combined & 0xf;
 
             array_reserve(data, array_size(data) + length);
