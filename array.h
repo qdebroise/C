@@ -96,13 +96,12 @@
 #define array_end(B) ((B) ? (B) + _array_header(B)->_size : 0)
 
 #ifndef NDEBUG
-    #define array_at(B, I) (B)                                                          \
-        ? (assert((I) >= 0 && (I) < array_size(B) && "Array out of bounds."), (B)[(I)]) \
-        : (assert(!"Array is NULL."), 0)
-    #define array_remove_fast(B, I) ((B)                                                \
-        ? (assert((I) >= 0 && (I) < array_size(B) && "Array out of bounds."),           \
-          (B)[I] = (B)[_array_header(B)->_size - 1])                                    \
-        : assert(!"Array is NULL.")
+    #define array_at(B, I)                                                  \
+        assert((I) >= 0 && (I) < array_size(B) && "Array out of bounds.");  \
+        (B)[(I)]
+    #define array_remove_fast(B, I)                                         \
+        assert((I) >= 0 && (I) < array_size(B) && "Array out of bounds.");  \
+          (B)[I] = (B)[_array_header(B)->_size - 1])
 #else
     #define array_at(B, I) ((B)[(I)])
     #define array_remove_fast(B, I) ((B) ? (B)[(I)] = (B)[_array_header(B)->_size - 1] : 0)
