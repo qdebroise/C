@@ -52,10 +52,14 @@ int main(int argc, char* argv[])
     toc = clock();
     float lzss_uncompression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
 
-    printf("LZ77:\n\tCompression rate (%%): %.3f\n\tCompression time (s): %f\n\tUncompression time (s): %f\n",
+    printf("LZ77:\n\tInput size: %f Mb\n\tOutput size: %f Mb\n\tCompression rate (%%): %.3f\n\tCompression time (s): %f\n\tUncompression time (s): %f\n",
+            (float)end / (1 << 20),
+            (float)array_size(lz77_compressed_data) / (1 << 20),
             (1 - array_size(lz77_compressed_data) / (float)array_size(lz77_uncompressed_data)) * 100,
             lz77_compression_time_s, lz77_uncompression_time_s);
-    printf("LZSS:\n\tCompression rate (%%): %.3f\n\tCompression time (s): %f\n\tUncompression time (s): %f\n",
+    printf("LZSS:\n\tInput size: %f Mb\n\tOutput size: %f Mb\n\tCompression rate (%%): %.3f\n\tCompression time (s): %f\n\tUncompression time (s): %f\n",
+            (float)end / (1 << 20),
+            (float)array_size(lzss_compressed_data) / (1 << 20),
             (1 - array_size(lzss_compressed_data) / (float)array_size(lzss_uncompressed_data)) * 100,
             lzss_compression_time_s, lzss_uncompression_time_s);
 
