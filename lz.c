@@ -149,19 +149,19 @@ uint32_t record_match(lz_context_t* ctx, uint32_t count, uint32_t cur_relpos)
 
     do
     {
-        if (relpos == WIN_SIZE)
-        {
-            reindex_hashtable(ctx, relpos);
-            ctx->base = ctx->base + relpos;
-            relpos = 0;
-        }
-
         uint32_t slot = hash(ctx->lookahead) & WIN_MASK;
         ctx->prev[relpos] = ctx->head[slot];
         ctx->head[slot] = relpos;
 
         ctx->lookahead++;
         relpos++;
+
+        if (relpos == WIN_SIZE)
+        {
+            reindex_hashtable(ctx, relpos);
+            ctx->base = ctx->base + relpos;
+            relpos = 0;
+        }
 
     } while (--remaining);
 
@@ -269,13 +269,6 @@ uint8_t* lz_compress(const uint8_t* input, size_t size)
             ctx.flag_count = 0;
             ctx.flag = array_size(ctx.output);
             array_push(ctx.output, 0);
-        }
-
-        if (cur_relpos >= WIN_SIZE)
-        {
-            reindex_hashtable(&ctx, cur_relpos);
-            ctx.base = ctx.base + cur_relpos;
-            cur_relpos = 0;
         }
 
         find_longest_match(&ctx, &match_offset, &match_length);
