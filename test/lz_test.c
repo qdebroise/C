@@ -7,7 +7,6 @@
 // https://go-compression.github.io/algorithms/lzss/
 // https://gist.github.com/fogus/5401265
 // https://github.com/cstdvd/lz77
-
 int main(int argc, char* argv[])
 {
     // static const char content[] = "abcabcabcabc";
@@ -28,61 +27,44 @@ int main(int argc, char* argv[])
 
     clock_t tic, toc;
 
-    printf("Start LZ77 compression\n");
+    printf("Start LZ compression\n");
     tic = clock();
-    uint8_t* lz77_compressed_data = lz77_compress(content, end);
+    uint8_t* compressed_data = lz_compress(content, end);
     toc = clock();
-    float lz77_compression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
+    float compression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
 
-    printf("Start LZ77 decompression\n");
+    printf("Start LZ decompression\n");
     tic = clock();
-    uint8_t* lz77_uncompressed_data = lz77_uncompress(lz77_compressed_data, array_size(lz77_compressed_data));
+    uint8_t* uncompressed_data = lz_uncompress(compressed_data, array_size(compressed_data));
     toc = clock();
-    float lz77_uncompression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
+    float uncompression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
 
-    printf("Start LZSS compression\n");
-    tic = clock();
-    uint8_t* lzss_compressed_data = lzss_compress(content, end);
-    toc = clock();
-    float lzss_compression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
-
-    printf("Start LZSS decompression\n");
-    tic = clock();
-    uint8_t* lzss_uncompressed_data = lzss_uncompress(lzss_compressed_data, array_size(lzss_compressed_data));
-    toc = clock();
-    float lzss_uncompression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
-
-    printf("LZ77:\n\tInput size: %f Mb\n\tOutput size: %f Mb\n\tCompression rate (%%): %.3f\n\tCompression time (s): %f\n\tUncompression time (s): %f\n",
+    printf("LZ:\n\tInput size: %f Mb\n\tOutput size: %f Mb\n\tCompression rate (%%): %.3f\n\tCompression time (s): %f\n\tUncompression time (s): %f\n",
             (float)end / (1 << 20),
-            (float)array_size(lz77_compressed_data) / (1 << 20),
-            (1 - array_size(lz77_compressed_data) / (float)array_size(lz77_uncompressed_data)) * 100,
-            lz77_compression_time_s, lz77_uncompression_time_s);
-    printf("LZSS:\n\tInput size: %f Mb\n\tOutput size: %f Mb\n\tCompression rate (%%): %.3f\n\tCompression time (s): %f\n\tUncompression time (s): %f\n",
-            (float)end / (1 << 20),
-            (float)array_size(lzss_compressed_data) / (1 << 20),
-            (1 - array_size(lzss_compressed_data) / (float)array_size(lzss_uncompressed_data)) * 100,
-            lzss_compression_time_s, lzss_uncompression_time_s);
+            (float)array_size(compressed_data) / (1 << 20),
+            (1 - array_size(compressed_data) / (float)array_size(uncompressed_data)) * 100,
+            compression_time_s, uncompression_time_s);
 
     /*
-    printf("LZSS compressed data stream:\n");
-    for (size_t i = 0; i < array_size(lzss_compressed_data); ++i)
+    printf("LZ compressed data stream:\n");
+    for (size_t i = 0; i < array_size(compressed_data); ++i)
     {
-        printf("0x%x ", lzss_compressed_data[i]);
+        printf("0x%x ", compressed_data[i]);
     }
-    printf("\nCompressed size: %lu bytes\n\n", array_size(lzss_compressed_data));
+    printf("\nCompressed size: %lu bytes\n\n", array_size(compressed_data));
+    */
 
+    /*
     printf("Uncompressed data stream:\n");
-    for (uint8_t* byte = lzss_uncompressed_data; byte < lzss_uncompressed_data + array_size(lzss_uncompressed_data); ++byte)
+    for (uint8_t* byte = uncompressed_data; byte < uncompressed_data + array_size(uncompressed_data); ++byte)
     {
         printf("%c", *byte);
     }
-    printf("\nUncompressed size: %lu bytes\n", array_size(lzss_uncompressed_data));
+    printf("\nUncompressed size: %lu bytes\n", array_size(uncompressed_data));
     */
 
-    array_free(lz77_compressed_data);
-    array_free(lz77_uncompressed_data);
-    array_free(lzss_compressed_data);
-    array_free(lzss_uncompressed_data);
+    array_free(compressed_data);
+    array_free(uncompressed_data);
     free(content);
 
     return 0;

@@ -2,179 +2,197 @@
 //  - https://courses.cs.duke.edu//spring03/cps296.5/papers/ziv_lempel_1977_universal_algorithm.pdf
 //  - http://michael.dipperstein.com/lzss/
 //
+// https://github.com/ebiggers/libdeflate/blob/fbada10aa9da4ed8145a026a80cedff9601fb874/lib/hc_matchfinder.h
 
 #include "lz.h"
-
 #include "array.h"
 
+#include <stdint.h>
 
-#include <assert.h>
-#include <stdbool.h>
-#include <stdlib.h>
+// Use a 32K sliding window.
+#define WIN_BITS 15
+#define WIN_SIZE (1 << WIN_BITS)
+#define WIN_MASK (WIN_SIZE - 1)
 
-#define ENCODED_LENGTH_BITS 4   // Number of bits used to encode the length of a reference.
-#define ENCODED_OFFSET_BITS 12  // Number of bits used to encode the offset of a reference.
+// Minimum match length required to ouptput a reference.
+#define MIN_MATCH_LEN 3
 
-_Static_assert(ENCODED_OFFSET_BITS + ENCODED_LENGTH_BITS == 16, "The pair (offset, length) must fit exactly on 2 bytes.");
-
-static const size_t LOOK_AHEAD_BUFFER_SIZE = 1 << ENCODED_LENGTH_BITS;
-static const size_t SEARCH_BUFFER_SIZE = 1 << ENCODED_OFFSET_BITS;
-
-static inline size_t min(size_t a, size_t b)
-{
-    return a < b ? a : b;
-}
-
-// Linked list node used for faster prefix starting position lookup.
-typedef struct node_t
-{
-    size_t index; // Global index in the stream.
-    struct node_t* next; // Next linked list node.
-} node_t;
-
-// Static freelist of nodes. Having this static list of nodes avoid lots of heap allocation.
-typedef struct node_freelist_o
-{
-    node_t pool[2 * SEARCH_BUFFER_SIZE]; // Pool of nodes.
-    node_t* next_free; // Pointer to the next free node.
-    size_t size; // Number of nodes allocated so far. This *MUST* never be larger than the size of the pool.
-} node_freelist_o;
-
-void node_freelist_init(node_freelist_o* fl)
-{
-    fl->next_free = NULL;
-    fl->size = 0;
-}
-
-node_t* node_freelist_alloc(node_freelist_o* fl)
-{
-    if (!fl->next_free)
-    {
-        assert(fl->size < 2 * SEARCH_BUFFER_SIZE);
-        fl->next_free = &fl->pool[fl->size++];
-        fl->next_free->next = NULL;
-    }
-
-    node_t* new_node = fl->next_free;
-    fl->next_free = fl->next_free->next;
-
-    new_node->index = 0;
-    new_node->next = NULL;
-
-    return new_node;
-}
-
-// Once release `node` *MUST NOT* be used as it is internally modified by the free list to maintain the
-// list of free nodes.
-void node_freelist_release(node_freelist_o* fl, node_t* node)
-{
-    assert(fl && node);
-
-    node->next = fl->next_free;
-    fl->next_free = node;
-}
-
-typedef struct compression_context_t
-{
-    node_freelist_o nodes_pool;
-    node_t* hashtable[256]; // Hashtable where the hash is the first byte of a sequence. It uses closed adressing by maintain a linked list of collisions.
-} compression_context_t;
-
-void hashtable_add_entry(compression_context_t* ctx, uint8_t byte, size_t index)
-{
-    node_t* node = node_freelist_alloc(&ctx->nodes_pool);
-    node->index = index;
-    node->next = ctx->hashtable[byte];
-    ctx->hashtable[byte] = node;
-}
-
-void _find_longest_match_linked_list(
-        compression_context_t* ctx,
-        size_t index,
-        const uint8_t* pattern, size_t pattern_size,
-        const uint8_t* str, size_t str_size,
-        size_t* match_offset, size_t* match_length)
-{
-    node_t* current = ctx->hashtable[pattern[0]];
-    node_t* prev = current;
-
-    size_t best_match_offset = 0;
-    size_t best_match_length = 0;
-
-    size_t sb_index = index - str_size;
-
-    while (current && index - current->index - 1 < SEARCH_BUFFER_SIZE)
-    {
-        size_t length = 1;
-        while (length < pattern_size - 1 && pattern[length] == str[current->index - sb_index + length])
-        {
-            ++length;
-        }
-
-        if (length > best_match_length)
-        {
-            best_match_length = length;
-            best_match_offset = current->index;
-        }
-
-        prev = current;
-        current = current->next;
-    }
-
-    // Remove nodes that fall outside the search window. If the current node is outside then
-    // all subsequent are also outside.
-    if (current && current != prev && index - current->index - 1 >= SEARCH_BUFFER_SIZE)
-    {
-        prev->next = NULL;
-
-        while (current)
-        {
-            node_t* next_node = current->next;
-            node_freelist_release(&ctx->nodes_pool, current);
-            current = next_node;
-        }
-    }
-
-    *match_offset = best_match_offset;
-    *match_length = best_match_length;
-}
-
-// Find the longest prefix of `pattern` into `str`. This is a brute force method in O(n*m).
+// In the output stream a reference is coded on 24 bits (a 16 bits value and an 8 bits value).
+// The 16 bits value holds the match offset on 15 bits. The extra bit is part of the match length
+// which is coded on the next 8 bits + this extra bit.
 //
-// @Note: this is designed for the LZ77 algorithm and cannot be reused as is externally.
+// Thus, we have a match offset of 15 bits and a match length of 9 bits.
 //
-// The specificities are the following:
-//  - when there are several same length matches then the one at the end of `str` is preferred since
-//  it will be the closest to the look-ahead buffer.
-//  - The search can go beyong `str` size to allow overlapping the look-ahead buffer. The only constraint
-//  is the match must not be longer than `pattern_size`.
-static void _find_longest_match_bruteforce(
-    const uint8_t* pattern, size_t pattern_size,
-    const uint8_t* str, size_t str_size,
-    size_t* match_offset, size_t* match_length)
+// |                 | 8 bits |
+// |  16 bits value  | value  |  Memory layout
+// +---------------+-+--------+
+// |010101011011110|1|00010110|
+// +---------------+-+--------+
+// |    15 bits    |  9 bits  |  Actual representation
+// |    offset     |  length  |
+//
+#define MATCH_OFFSET_BITS WIN_BITS
+#define MATCH_OFFSET_MAX (1 << MATCH_OFFSET_BITS)
+#define MATCH_LENGTH_BITS 9
+#define MATCH_LENGTH_MAX (1 << MATCH_LENGTH_BITS)
+
+
+typedef struct lz_context_t lz_context_t;
+
+struct lz_context_t
 {
-    size_t best_match_offset = 0;
-    size_t best_match_length = 0;
+    const uint8_t* lookahead;
+    const uint8_t* input_end;
 
-    for (size_t i = 0; i < str_size; ++i)
+    // Pointer from which bytes positions inside the sliding window are computed.
+    const uint8_t* base;
+
+    uint8_t* output; // Array.
+    uint32_t flag; // Flag byte index (we cannot use direct pointer because it will be invalidated on output resize).
+    uint8_t flag_count; // Flags written so far.
+
+    int16_t head[WIN_SIZE]; // Hashtable buckets.
+    int16_t prev[WIN_SIZE]; // Hashtable linked list.
+
+    // Specifies how far in the linked list we sould go when searching for a match.
+    uint16_t match_search_depth;
+
+    uint32_t rolling_hash; // Rolling hash to avoid recalculations.
+};
+
+static inline void init_lz_context(lz_context_t* ctx, const uint8_t* input, size_t size)
+{
+    *ctx = (lz_context_t){
+        .lookahead = input,
+        .input_end = input + size,
+        .base = input,
+        .output = NULL,
+        .match_search_depth = 64, // @TODO: compression level selection.
+        .rolling_hash = 0,
+        .flag_count = 8, // So that it automatically "allocates" a new flag byte at the start.
+    };
+
+    for (int i = 0; i < WIN_SIZE; ++i)
     {
-        if (pattern[0] != str[i]) continue;
+        ctx->head[i] = (int16_t)(1ull << 15); // Maxmum negative value on a int16_t.
+        ctx->prev[i] = (int16_t)(1ull << 15); // Maxmum negative value on a int16_t.
+    }
+}
 
-        size_t length = 1;
-        while (pattern[length] == str[i + length] && length < pattern_size - 1)
+static inline uint32_t hash(const uint8_t* lookahead)
+{
+    // @TODO: rolling hash and/or better hashing :p.
+    return ((3483  * ((uint32_t)*(lookahead + 0))) +
+            (23081 * ((uint32_t)*(lookahead + 1))) +
+            (6954  * ((uint32_t)*(lookahead + 2))));
+}
+
+static void reindex_hashtable(lz_context_t* ctx, uint32_t cur_relpos)
+{
+    for (int i = 0; i < WIN_SIZE; ++i)
+    {
+        if (ctx->head[i] <= cur_relpos) ctx->head[i] -= cur_relpos;
+        if (ctx->prev[i] <= cur_relpos) ctx->prev[i] -= cur_relpos;
+    }
+}
+
+// https://www.programmersought.com/article/2576500091/
+static void find_longest_match(const lz_context_t* ctx, uint32_t* out_match_offset, uint32_t* out_match_length)
+{
+    uint32_t best_match_length = 0;
+    uint32_t best_match_offset = 0;
+
+    int16_t cur_relpos = ctx->lookahead - ctx->base;
+    int16_t limit = cur_relpos - WIN_SIZE; // Don't search beyond the sliding window.
+    int16_t max_match_end = cur_relpos + MATCH_LENGTH_MAX;
+    uint16_t search_depth = ctx->match_search_depth;
+
+    assert(cur_relpos >= 0 && "Lookahead pointer is behind the base pointer.");
+
+    uint16_t slot = hash(ctx->lookahead) & WIN_MASK;
+
+    const uint8_t* match = ctx->base + cur_relpos;
+    int16_t match_pos = ctx->head[slot];
+
+    while (match_pos > limit && search_depth-- != 0)
+    {
+        const uint8_t* candidate = ctx->base + match_pos;
+        uint32_t candidate_length = 0;
+
+        // @TODO: check first and last byte of best match for speedup.
+
+        while (/* check size not eof and not > to max length && */ candidate[candidate_length] == match[candidate_length])
         {
-            ++length;
+            ++candidate_length;
         }
 
-        if (length >= best_match_length)
+        if (candidate_length > best_match_length)
         {
-            best_match_length = length;
-            best_match_offset = i;
+            best_match_length = candidate_length;
+            best_match_offset = cur_relpos - match_pos;
         }
+
+        match_pos = ctx->prev[match_pos];
     }
 
-    *match_offset = best_match_offset;
-    *match_length = best_match_length;
+    *out_match_offset = best_match_offset;
+    *out_match_length = best_match_length;
+}
+
+// Saves `count` input bytes into the directionnary.
+uint32_t record_match(lz_context_t* ctx, uint32_t count, uint32_t cur_relpos)
+{
+    assert(count >= 0 && "Invalid match length.");
+
+    uint32_t remaining = count;
+    uint32_t relpos = cur_relpos;
+
+    do
+    {
+        if (relpos == WIN_SIZE)
+        {
+            reindex_hashtable(ctx, relpos);
+            ctx->base = ctx->base + relpos;
+            relpos = 0;
+        }
+
+        uint32_t slot = hash(ctx->lookahead) & WIN_MASK;
+        ctx->prev[relpos] = ctx->head[slot];
+        ctx->head[slot] = relpos;
+
+        ctx->lookahead++;
+        relpos++;
+
+    } while (--remaining);
+
+    return relpos;
+}
+
+void emit_literal(lz_context_t* ctx, uint8_t byte)
+{
+    array_push(ctx->output, byte);
+    ctx->flag_count++;
+}
+
+void emit_reference(lz_context_t* ctx, uint16_t offset, uint16_t length)
+{
+    // Offset is on 15 bits, length is on 9 bits. Store the length 9th bit in the highest bit of the offset 16 bit value.
+    uint8_t shift = WIN_BITS;
+
+    uint16_t len_extra_bit = (length & (1 << 8)) >> 8;
+    uint8_t len = length & ((1 << 8) - 1);
+    uint16_t off = (offset & WIN_MASK) | (len_extra_bit << shift);
+
+    uint8_t b1 = len;
+    uint8_t b2 = off >> 8;
+    uint8_t b3 = off & ((1 << 8) - 1);
+
+    array_push(ctx->output, b1);
+    array_push(ctx->output, b2);
+    array_push(ctx->output, b3);
+
+    ctx->output[ctx->flag] |= (1 << ctx->flag_count);
+    ctx->flag_count++;
 }
 
 // =====================
@@ -213,114 +231,7 @@ static void _find_longest_match_bruteforce(
 //
 //        +-------+----+
 //        |abracad|abra|        -> (7, 4, NULL) -> abra
-
-
-static void _emit_triple(uint8_t** compressed_data, size_t offset, size_t length, uint8_t next_byte)
-{
-    assert(offset <= SEARCH_BUFFER_SIZE);
-    assert(length <= LOOK_AHEAD_BUFFER_SIZE);
-
-    uint16_t truncated_offset = (SEARCH_BUFFER_SIZE - 1) & offset;
-    uint16_t truncated_length = (LOOK_AHEAD_BUFFER_SIZE - 1) & length;
-    uint16_t combined = (truncated_offset << ENCODED_LENGTH_BITS) | truncated_length;
-
-    uint8_t low = combined & 0xff;
-    uint8_t high = (combined >> 8) & 0xff;
-
-    array_push(*compressed_data, high);
-    array_push(*compressed_data, low);
-    array_push(*compressed_data, next_byte);
-}
-
-uint8_t* lz77_compress(const uint8_t* data, size_t size)
-{
-    uint8_t* compressed_data = NULL; // Array.
-
-    compression_context_t ctx = {
-        .hashtable = {0},
-    };
-    node_freelist_init(&ctx.nodes_pool);
-
-    size_t index = 0;
-    while (index < size)
-    {
-        const uint8_t* current = data + index;
-        // Here, we compute how many elements are in the search buffer and in the look-ahead buffer.
-        // - The search buffer is full most of the time except at the start of the compression where it is empty and fills as the sliding window moves.
-        // - The look-ahead buffer, at the opposite, starts to empty towards the end of the compression process.
-        //
-        //                                  search_buffer_ptr
-        //  search_buffer_ptr/current               |  current
-        //              |                           |    |
-        //       +-----+v--+                      +-v---+v--+
-        //       |     |abc|def                   | abcd|ef |
-        // Size: |[ 0 ]|[3]|                      |[ 4 ]|[2]|
-        //
-        size_t look_ahead_buffer_content_size = min(LOOK_AHEAD_BUFFER_SIZE, size - index);
-        size_t search_buffer_content_size = min(index, SEARCH_BUFFER_SIZE);
-        const uint8_t* search_buffer_ptr = current - search_buffer_content_size;
-
-        size_t match_offset, match_length;
-        // _find_longest_match_bruteforce(current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
-        _find_longest_match_linked_list(&ctx, index, current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
-
-        if (match_length == 0)
-        {
-            _emit_triple(&compressed_data, 0, 0, *current);
-            hashtable_add_entry(&ctx, *current, index);
-        }
-        else
-        {
-            for (size_t i = 0; i < match_length; ++i)
-            {
-                hashtable_add_entry(&ctx, current[i], index + i);
-            }
-
-            // The match offset must be backward from the end of the search buffer.
-            // match_offset = search_buffer_content_size - match_offset;
-            match_offset = index - match_offset - 1;
-            // If we reached the end of the data stream then the next byte in the triple is NULL.
-            uint8_t next_byte = current + match_length == current + size ? 0 : current[match_length];
-            hashtable_add_entry(&ctx, next_byte, index + match_length);
-            _emit_triple(&compressed_data, match_offset, match_length, next_byte);
-        }
-
-        index += match_length + 1;
-    }
-
-    return compressed_data;
-}
-
-uint8_t* lz77_uncompress(const uint8_t* compressed_data, size_t size)
-{
-    uint8_t* data = NULL; // Array.
-
-    for (const uint8_t* byte = compressed_data; byte < compressed_data + size; byte+=3)
-    {
-        uint16_t combined = (byte[0] << 8) | byte[1];
-        uint8_t next_byte = byte[2];
-
-        uint16_t offset = combined >> ENCODED_LENGTH_BITS;
-        uint16_t length = combined & (LOOK_AHEAD_BUFFER_SIZE - 1);
-
-        // We reserve the required space up front. We cannot rely on `array_push()` to
-        // reserve memory as it can modifiy the `data` pointer and thus invalidates `it` and `end`.
-        array_reserve(data, array_size(data) + length);
-
-        const uint8_t* it = data + array_size(data) - offset - 1;
-        const uint8_t* end = it + length;
-        while (it != end)
-        {
-            array_push(data, *it);
-            ++it;
-        }
-
-        array_push(data, next_byte);
-    }
-
-    return data;
-}
-
+//
 // =====================
 // ===     LZSS      ===
 // =====================
@@ -336,114 +247,91 @@ uint8_t* lz77_uncompress(const uint8_t* compressed_data, size_t size)
 // - A match of length N uses '1 + 3*8' bits if coded as a distance,length pair.
 // Thus we have the following table:
 //
-// Match Length     Coded as characters     Coded as distance,length pair
+// Match Length     Coded as literals           Coded as reference
 //      1                   9                           25
 //      2                   18                          25
 //      3                   27                          25
 //
 // Therefore matches with a length lower than take less space when coded as single characters.
-
-#define LZSS_MIN_MATCH_LENGTH 3
-
-uint8_t* lzss_compress(const uint8_t* data, size_t size)
+uint8_t* lz_compress(const uint8_t* input, size_t size)
 {
-    uint8_t* output = NULL;
-    array_push(output, 0);
-    size_t flags_index = 0;
-    uint8_t flag_count = 0;
+    lz_context_t ctx;
+    init_lz_context(&ctx, input, size);
 
-    size_t index = 0;
-    compression_context_t ctx = {
-        .hashtable = {0},
-    };
-    node_freelist_init(&ctx.nodes_pool);
+    uint32_t cur_relpos = 0;
+    uint32_t match_length;
+    uint32_t match_offset;
 
-    while (index < size)
+    while (ctx.lookahead != ctx.input_end)
     {
-        const uint8_t* current = data + index;
-        // Here, we compute how many elements are in the search buffer and in the look-ahead buffer.
-        // - The search buffer is full most of the time except at the start of the compression where it is empty and fills as the sliding window moves.
-        // - The look-ahead buffer, at the opposite, starts to empty towards the end of the compression process.
-        //
-        //                                  search_buffer_ptr
-        //  search_buffer_ptr/current               |  current
-        //              |                           |    |
-        //       +-----+v--+                      +-v---+v--+
-        //       |     |abc|def                   | abcd|ef |
-        // Size: |[ 0 ]|[3]|                      |[ 4 ]|[2]|
-        //
-        size_t look_ahead_buffer_content_size = min(LOOK_AHEAD_BUFFER_SIZE, size - index);
-        size_t search_buffer_content_size = min(index, SEARCH_BUFFER_SIZE);
-        const uint8_t* search_buffer_ptr = current - search_buffer_content_size;
-
-        size_t match_offset, match_length;
-        // _find_longest_match_bruteforce(current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
-        _find_longest_match_linked_list(&ctx, index, current, look_ahead_buffer_content_size, search_buffer_ptr, search_buffer_content_size, &match_offset, &match_length);
-
-        if (match_length < LZSS_MIN_MATCH_LENGTH)
+        if (ctx.flag_count == 8)
         {
-            // Flags are initialized to 0 so nothing to change in there.
-            flag_count++;
-            array_push(output, *current);
-            hashtable_add_entry(&ctx, *current, index);
+            ctx.flag_count = 0;
+            ctx.flag = array_size(ctx.output);
+            array_push(ctx.output, 0);
+        }
 
-            index += 1;
+        if (cur_relpos >= WIN_SIZE)
+        {
+            reindex_hashtable(&ctx, cur_relpos);
+            ctx.base = ctx.base + cur_relpos;
+            cur_relpos = 0;
+        }
+
+        find_longest_match(&ctx, &match_offset, &match_length);
+
+        if (match_length < MIN_MATCH_LEN)
+        {
+            // Emit literals.
+            uint8_t num_literals = match_length == 0 ? 1 : match_length;
+            for (int i = 0; i < num_literals; ++i)
+            {
+                emit_literal(&ctx, ctx.base[cur_relpos + i]);
+
+                if (ctx.flag_count == 8)
+                {
+                    ctx.flag_count = 0;
+                    ctx.flag = array_size(ctx.output);
+                    array_push(ctx.output, 0);
+                }
+            }
+            cur_relpos = record_match(&ctx, num_literals, cur_relpos);
         }
         else
         {
-            for (size_t i = 0; i < match_length; ++i)
-            {
-                hashtable_add_entry(&ctx, current[i], index + i);
-            }
-            // The match offset must be backward from the end of the search buffer.
-            // match_offset = search_buffer_content_size - match_offset;
-            match_offset = index - match_offset - 1;
-
-            uint16_t truncated_offset = (SEARCH_BUFFER_SIZE - 1) & match_offset; // 12 bits
-            uint16_t truncated_length = (LOOK_AHEAD_BUFFER_SIZE - 1) & match_length; // 4 bits
-            uint16_t combined = (truncated_offset << ENCODED_LENGTH_BITS) | truncated_length;
-
-            uint8_t low = combined & 0xff;
-            uint8_t high = (combined >> 8) & 0xff;
-
-            output[flags_index] |= (1 << flag_count++);
-            array_push(output, low);
-            array_push(output, high);
-
-            index += match_length;
-        }
-
-        if (flag_count == 8)
-        {
-            flags_index = array_size(output);
-            array_push(output, 0);
-            flag_count = 0;
+            // Emit reference.
+            emit_reference(&ctx, match_offset, match_length);
+            cur_relpos = record_match(&ctx, match_length, cur_relpos);
         }
     }
 
-    return output;
+    return ctx.output;
 }
 
-uint8_t* lzss_uncompress(const uint8_t* compressed_data, size_t size)
+uint8_t* lz_uncompress(const uint8_t* compressed_data, size_t size)
 {
     uint8_t* data = NULL; // Array.
 
     uint8_t flags = compressed_data[0];
     uint8_t flag_count = 0;
 
-    for (size_t i = 1; i < size;)
+    size_t i;
+    for (i = 1; i < size;)
     {
         if ((flags >> flag_count) & 0x1)
         {
-            uint16_t low = compressed_data[i++];
+            uint16_t len = compressed_data[i++];
             uint16_t high = compressed_data[i++];
-            uint16_t combined = (high << 8) | low;
+            uint16_t low = compressed_data[i++];
+            uint16_t off = (high << 8) | low;
 
-            uint16_t offset = combined >> ENCODED_LENGTH_BITS;
-            uint16_t length = combined & 0xf;
+            uint8_t shift = WIN_BITS;
+
+            uint16_t length = len | ((off >> shift) << 8);
+            uint16_t offset = off & ((1 << shift) - 1);
 
             array_reserve(data, array_size(data) + length);
-            const uint8_t* it = data + array_size(data) - offset - 1;
+            const uint8_t* it = data + array_size(data) - offset; // Not -1 because offset 0 is current char.
             const uint8_t* end = it + length;
             while (it != end)
             {
@@ -467,4 +355,3 @@ uint8_t* lzss_uncompress(const uint8_t* compressed_data, size_t size)
 
     return data;
 }
-
