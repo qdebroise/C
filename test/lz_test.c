@@ -16,7 +16,7 @@ int main(int argc, char* argv[])
     // static const size_t end = sizeof(content) / sizeof(content[0]);
 
     FILE* f = fopen("test/bible.txt", "rb");
-    // FILE* f = fopen("bitarray.h", "rb");
+    // FILE* f = fopen("tmp.txt", "rb");
     if (!f) return 1;
     fseek(f, 0, SEEK_END);
     size_t end = ftell(f);
@@ -54,9 +54,15 @@ int main(int argc, char* argv[])
     printf("\nCompressed size: %lu bytes\n\n", array_size(compressed_data));
     */
 
+    /*
     printf("Uncompressed data stream:\n");
-    printf("%s\n", uncompressed_data);
+    for (int i = 0; i < array_size(uncompressed_data); ++i)
+    {
+        printf("%c", uncompressed_data[i]);
+    }
+    */
     printf("\nUncompressed size: %lu bytes\n", array_size(uncompressed_data));
+    printf("Original size: %lu bytes\n", end);
 
     array_free(compressed_data);
     array_free(uncompressed_data);

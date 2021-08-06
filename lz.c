@@ -67,7 +67,7 @@ static inline void init_lz_context(lz_context_t* ctx, const uint8_t* input, size
         .input_end = input + size,
         .base = input,
         .output = NULL,
-        .match_search_depth = 64, // @TODO: compression level selection.
+        .match_search_depth = 64, // @Todo: compression level selection.
         .rolling_hash = 0,
         .flag_count = 8, // So that it automatically "allocates" a new flag byte at the start.
     };
@@ -81,7 +81,7 @@ static inline void init_lz_context(lz_context_t* ctx, const uint8_t* input, size
 
 static inline uint32_t hash(const uint8_t* lookahead)
 {
-    // @TODO: rolling hash and/or better hashing :p.
+    // @Todo: rolling hash and/or better hashing :p.
     return ((3483  * ((uint32_t)*(lookahead + 0))) +
             (23081 * ((uint32_t)*(lookahead + 1))) +
             (6954  * ((uint32_t)*(lookahead + 2))));
@@ -97,7 +97,7 @@ static void reindex_hashtable(lz_context_t* ctx, uint32_t cur_relpos)
 }
 
 // https://www.programmersought.com/article/2576500091/
-static void find_longest_match(const lz_context_t* ctx, uint32_t* out_match_offset, uint32_t* out_match_length)
+void find_longest_match(const lz_context_t* ctx, uint32_t* out_match_offset, uint32_t* out_match_length)
 {
     uint32_t best_match_length = 0;
     uint32_t best_match_offset = 0;
@@ -106,6 +106,21 @@ static void find_longest_match(const lz_context_t* ctx, uint32_t* out_match_offs
     int16_t limit = cur_relpos - WIN_SIZE; // Don't search beyond the sliding window.
     int16_t max_match_end = cur_relpos + MATCH_LENGTH_MAX;
     uint16_t search_depth = ctx->match_search_depth;
+
+    uint16_t max_length = 258;
+    if (max_length > ctx->input_end - ctx->lookahead)
+    {
+        max_length = ctx->input_end - ctx->lookahead;
+    }
+
+    if (max_length < 3)
+    {
+        // @Cleanup: remove hardcoded values. And maybe max_length should be given as a parameter.
+        // @Todo: abort. This indeed fixes address sanitizer's issues when coupled to the code in record_match().
+        *out_match_offset = 0;
+        *out_match_length = 0;
+        return;
+    }
 
     assert(cur_relpos >= 0 && "Lookahead pointer is behind the base pointer.");
 
@@ -119,9 +134,12 @@ static void find_longest_match(const lz_context_t* ctx, uint32_t* out_match_offs
         const uint8_t* candidate = ctx->base + match_pos;
         uint32_t candidate_length = 0;
 
-        // @TODO: check first and last byte of best match for speedup.
+        // @Todo: early abort (break) if the distance to the end of input is less than the current best length.
+        // @Todo: check first and last byte of best match for speedup. We can then start/stop one byte later/earlier.
+        // @Todo: check not EOF.
+        // @Todo: check it does not exceed MAX_LENGTH.
 
-        while (/* check size not eof and not > to max length && */ candidate[candidate_length] == match[candidate_length])
+        while (candidate_length < max_length && candidate[candidate_length] == match[candidate_length])
         {
             ++candidate_length;
         }
@@ -144,11 +162,22 @@ uint32_t record_match(lz_context_t* ctx, uint32_t count, uint32_t cur_relpos)
 {
     assert(count >= 0 && "Invalid match length.");
 
+    // @Todo: don't record into the hashtable when close to the end. So remaining
+    // should be adjusted to account for that. And have a second unlikely loop that runs
+    // and only advance lookahead.
     uint32_t remaining = count;
     uint32_t relpos = cur_relpos;
 
     do
     {
+        // @Todo: see above's todo. Maybe this would be better outside the loop.
+        if (ctx->lookahead + 3 >= ctx->input_end)
+        {
+            ctx->lookahead += remaining;
+            relpos += remaining;
+            break;
+        }
+
         uint32_t slot = hash(ctx->lookahead) & WIN_MASK;
         ctx->prev[relpos] = ctx->head[slot];
         ctx->head[slot] = relpos;
