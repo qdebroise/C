@@ -31,25 +31,29 @@
 // |    15 bits    |  9 bits  |  Actual representation
 // |    offset     |  length  |
 //
+// @Todo: 9 bits for the length offers a max length of 512 but this is really huge
+// and I think its is too much. 256 is already big. There is a better way to organize
+// this. Like LZ4 sequences and stuff.
 #define MATCH_OFFSET_BITS WIN_BITS
 #define MATCH_OFFSET_MAX (1 << MATCH_OFFSET_BITS)
 #define MATCH_LENGTH_BITS 9
 #define MATCH_LENGTH_MAX (1 << MATCH_LENGTH_BITS)
 
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
 
 typedef struct lz_context_t lz_context_t;
 
 struct lz_context_t
 {
-    const uint8_t* lookahead;
-    const uint8_t* input_end;
+    const uint8_t* lookahead; // Pointer to the next bytes to compress.
+    const uint8_t* input_end; // Pointer to the end of the input + 1.
 
     // Pointer from which bytes positions inside the sliding window are computed.
     const uint8_t* base;
 
     uint8_t* output; // Array.
     uint32_t flag; // Flag byte index (we cannot use direct pointer because it will be invalidated on output resize).
-    uint8_t flag_count; // Flags written so far.
+    uint8_t flag_count; // Flags written so far in the current flag byte.
 
     int16_t head[WIN_SIZE]; // Hashtable buckets.
     int16_t prev[WIN_SIZE]; // Hashtable linked list.
@@ -57,7 +61,8 @@ struct lz_context_t
     // Specifies how far in the linked list we sould go when searching for a match.
     uint16_t match_search_depth;
 
-    uint32_t rolling_hash; // Rolling hash to avoid recalculations.
+    // Rolling hash to avoid recalculations. @Todo
+    uint32_t rolling_hash;
 };
 
 static inline void init_lz_context(lz_context_t* ctx, const uint8_t* input, size_t size)
@@ -89,7 +94,8 @@ static inline uint32_t hash(const uint8_t* lookahead)
 
 static void reindex_hashtable(lz_context_t* ctx, uint32_t cur_relpos)
 {
-    for (int i = 0; i < WIN_SIZE; ++i)
+    // @Todo: remove compilation warning about different types comparison.
+    for (uint32_t i = 0; i < WIN_SIZE; ++i)
     {
         if (ctx->head[i] <= cur_relpos) ctx->head[i] -= cur_relpos;
         if (ctx->prev[i] <= cur_relpos) ctx->prev[i] -= cur_relpos;
@@ -104,25 +110,28 @@ void find_longest_match(const lz_context_t* ctx, uint32_t* out_match_offset, uin
 
     int16_t cur_relpos = ctx->lookahead - ctx->base;
     int16_t limit = cur_relpos - WIN_SIZE; // Don't search beyond the sliding window.
-    int16_t max_match_end = cur_relpos + MATCH_LENGTH_MAX;
     uint16_t search_depth = ctx->match_search_depth;
+    uint16_t max_length = MATCH_LENGTH_MAX;
 
-    uint16_t max_length = 258;
+    assert(cur_relpos >= 0 && "Lookahead pointer is behind the base pointer.");
+
+    // Reduce the maximum match length as we approach the end of the input end.
     if (max_length > ctx->input_end - ctx->lookahead)
     {
         max_length = ctx->input_end - ctx->lookahead;
     }
 
-    if (max_length < 3)
+    // When there is very little input left we only need to output literals so we can return
+    // early. Furthermore, we avoid doing hash computation which would lead to invalid memory
+    // reads beyond the input end.
+    if (max_length < MIN_MATCH_LEN)
     {
         // @Cleanup: remove hardcoded values. And maybe max_length should be given as a parameter.
-        // @Todo: abort. This indeed fixes address sanitizer's issues when coupled to the code in record_match().
+        // @Todo: abort. This indeed fixes address sanitizer's issues when coupled to the code in record_bytes().
         *out_match_offset = 0;
         *out_match_length = 0;
         return;
     }
-
-    assert(cur_relpos >= 0 && "Lookahead pointer is behind the base pointer.");
 
     uint16_t slot = hash(ctx->lookahead) & WIN_MASK;
 
@@ -158,25 +167,34 @@ void find_longest_match(const lz_context_t* ctx, uint32_t* out_match_offset, uin
 }
 
 // Saves `count` input bytes into the directionnary.
-uint32_t record_match(lz_context_t* ctx, uint32_t count, uint32_t cur_relpos)
+uint32_t record_bytes(lz_context_t* ctx, uint32_t num_bytes, uint32_t cur_relpos)
 {
-    assert(count >= 0 && "Invalid match length.");
+    assert(num_bytes > 0 && "Invalid number of bytes to record.");
 
-    // @Todo: don't record into the hashtable when close to the end. So remaining
-    // should be adjusted to account for that. And have a second unlikely loop that runs
-    // and only advance lookahead.
-    uint32_t remaining = count;
+    uint32_t remaining = num_bytes;
     uint32_t relpos = cur_relpos;
+    uint32_t skip = 0;
 
-    do
+    // We don't want to record values in the hashtable as we approach the end of
+    // the input. Firstly, because we will only record literals from now and secondly,
+    // we would need to compute a hash value using bytes beyond the input end.
+    // To palliate this problem we simply reduce the number of remaining bytes to
+    // actually record and for the rest simply skip the values.
+    // @Todo @Performance: unlikely.
+    if (ctx->lookahead + num_bytes + MIN_MATCH_LEN > ctx->input_end)
     {
-        // @Todo: see above's todo. Maybe this would be better outside the loop.
-        if (ctx->lookahead + 3 >= ctx->input_end)
-        {
-            ctx->lookahead += remaining;
-            relpos += remaining;
-            break;
-        }
+        uint32_t penetration = ctx->lookahead + num_bytes + MIN_MATCH_LEN - ctx->input_end;
+        skip = MIN(penetration, remaining);
+        remaining -= (penetration > remaining ? remaining : penetration);
+
+        // v      v
+        // abrax|----
+        // 123456789
+        // nocheckin
+    }
+
+    while (remaining--)
+    {
 
         uint32_t slot = hash(ctx->lookahead) & WIN_MASK;
         ctx->prev[relpos] = ctx->head[slot];
@@ -191,8 +209,20 @@ uint32_t record_match(lz_context_t* ctx, uint32_t count, uint32_t cur_relpos)
             ctx->base = ctx->base + relpos;
             relpos = 0;
         }
+    }
 
-    } while (--remaining);
+    while (skip--) // @Todo @Performance: unlikely.
+    {
+        ctx->lookahead++;
+        relpos++;
+
+        if (relpos == WIN_SIZE)
+        {
+            reindex_hashtable(ctx, relpos);
+            ctx->base = ctx->base + relpos;
+            relpos = 0;
+        }
+    }
 
     return relpos;
 }
@@ -306,7 +336,7 @@ uint8_t* lz_compress(const uint8_t* input, size_t size)
         {
             // Emit literals.
             uint8_t num_literals = match_length == 0 ? 1 : match_length;
-            for (int i = 0; i < num_literals; ++i)
+            for (uint8_t i = 0; i < num_literals; ++i)
             {
                 emit_literal(&ctx, ctx.base[cur_relpos + i]);
 
@@ -317,13 +347,13 @@ uint8_t* lz_compress(const uint8_t* input, size_t size)
                     array_push(ctx.output, 0);
                 }
             }
-            cur_relpos = record_match(&ctx, num_literals, cur_relpos);
+            cur_relpos = record_bytes(&ctx, num_literals, cur_relpos);
         }
         else
         {
             // Emit reference.
             emit_reference(&ctx, match_offset, match_length);
-            cur_relpos = record_match(&ctx, match_length, cur_relpos);
+            cur_relpos = record_bytes(&ctx, match_length, cur_relpos);
         }
     }
 

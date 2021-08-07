@@ -54,13 +54,7 @@ int main(int argc, char* argv[])
     printf("\nCompressed size: %lu bytes\n\n", array_size(compressed_data));
     */
 
-    /*
-    printf("Uncompressed data stream:\n");
-    for (int i = 0; i < array_size(uncompressed_data); ++i)
-    {
-        printf("%c", uncompressed_data[i]);
-    }
-    */
+    // printf("%.*s\n", array_size(uncompressed_data), uncompressed_data);
     printf("\nUncompressed size: %lu bytes\n", array_size(uncompressed_data));
     printf("Original size: %lu bytes\n", end);
 
