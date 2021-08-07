@@ -39,6 +39,8 @@
 #define MATCH_LENGTH_BITS 9
 #define MATCH_LENGTH_MAX (1 << MATCH_LENGTH_BITS) - 1
 
+#define HASHTABLE_EMPTY_BUCKET ((int16_t)(1ull << 15)) // Max negative value for a int16_t.
+
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
 typedef struct lz_context_t lz_context_t;
@@ -79,8 +81,8 @@ static inline void init_lz_context(lz_context_t* ctx, const uint8_t* input, size
 
     for (int i = 0; i < WIN_SIZE; ++i)
     {
-        ctx->head[i] = (int16_t)(1ull << 15); // Maxmum negative value on a int16_t.
-        ctx->prev[i] = (int16_t)(1ull << 15); // Maxmum negative value on a int16_t.
+        ctx->head[i] = HASHTABLE_EMPTY_BUCKET;
+        ctx->prev[i] = HASHTABLE_EMPTY_BUCKET;
     }
 }
 
@@ -94,11 +96,15 @@ static inline uint32_t hash(const uint8_t* lookahead)
 
 static void reindex_hashtable(lz_context_t* ctx, uint32_t cur_relpos)
 {
-    // @Todo: remove compilation warning about different types comparison.
     for (uint32_t i = 0; i < WIN_SIZE; ++i)
     {
-        if (ctx->head[i] <= cur_relpos) ctx->head[i] -= cur_relpos;
-        if (ctx->prev[i] <= cur_relpos) ctx->prev[i] -= cur_relpos;
+        // Negative values will end up outside the window so we directly set the
+        // value to the empty value.
+        if (ctx->head[i] < 0) ctx->head[i] = HASHTABLE_EMPTY_BUCKET;
+        else ctx->head[i] -= cur_relpos;
+
+        if (ctx->prev[i] < 0) ctx->prev[i] = HASHTABLE_EMPTY_BUCKET;
+        else ctx->prev[i] -= cur_relpos;
     }
 }
 
@@ -111,7 +117,7 @@ void find_longest_match(const lz_context_t* ctx, uint32_t* out_match_offset, uin
     int16_t cur_relpos = ctx->lookahead - ctx->base;
     int16_t limit = cur_relpos - WIN_SIZE; // Don't search beyond the sliding window.
     uint16_t search_depth = ctx->match_search_depth;
-    uint16_t max_length = MATCH_LENGTH_MAX;
+    uint32_t max_length = MATCH_LENGTH_MAX;
 
     assert(cur_relpos >= 0 && "Lookahead pointer is behind the base pointer.");
 
@@ -126,8 +132,6 @@ void find_longest_match(const lz_context_t* ctx, uint32_t* out_match_offset, uin
     // reads beyond the input end.
     if (max_length < MIN_MATCH_LEN)
     {
-        // @Cleanup: remove hardcoded values. And maybe max_length should be given as a parameter.
-        // @Todo: abort. This indeed fixes address sanitizer's issues when coupled to the code in record_bytes().
         *out_match_offset = 0;
         *out_match_length = 0;
         return;
@@ -143,10 +147,7 @@ void find_longest_match(const lz_context_t* ctx, uint32_t* out_match_offset, uin
         const uint8_t* candidate = ctx->base + match_pos;
         uint32_t candidate_length = 0;
 
-        // @Todo: early abort (break) if the distance to the end of input is less than the current best length.
-        // @Todo: check first and last byte of best match for speedup. We can then start/stop one byte later/earlier.
-        // @Todo: check not EOF.
-        // @Todo: check it does not exceed MAX_LENGTH.
+        // @Todo @Performance: check first and last byte of best match for speedup. We can then start/stop one byte later/earlier.
 
         while (candidate_length < max_length && candidate[candidate_length] == match[candidate_length])
         {
@@ -171,8 +172,8 @@ uint32_t record_bytes(lz_context_t* ctx, uint32_t num_bytes, uint32_t cur_relpos
 {
     assert(num_bytes > 0 && "Invalid number of bytes to record.");
 
-    uint32_t remaining = num_bytes;
     uint32_t relpos = cur_relpos;
+    uint32_t remaining = num_bytes;
     uint32_t skip = 0;
 
     // We don't want to record values in the hashtable as we approach the end of
@@ -186,11 +187,6 @@ uint32_t record_bytes(lz_context_t* ctx, uint32_t num_bytes, uint32_t cur_relpos
         uint32_t penetration = ctx->lookahead + num_bytes + MIN_MATCH_LEN - ctx->input_end;
         skip = MIN(penetration, remaining);
         remaining -= (penetration > remaining ? remaining : penetration);
-
-        // v      v
-        // abrax|----
-        // 123456789
-        // nocheckin
     }
 
     while (remaining--)
@@ -317,7 +313,7 @@ uint8_t* lz_compress(const uint8_t* input, size_t size)
     lz_context_t ctx;
     init_lz_context(&ctx, input, size);
 
-    uint32_t cur_relpos = 0;
+    uint16_t cur_relpos = 0;
     uint32_t match_length;
     uint32_t match_offset;
 
