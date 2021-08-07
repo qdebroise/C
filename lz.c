@@ -35,9 +35,9 @@
 // and I think its is too much. 256 is already big. There is a better way to organize
 // this. Like LZ4 sequences and stuff.
 #define MATCH_OFFSET_BITS WIN_BITS
-#define MATCH_OFFSET_MAX (1 << MATCH_OFFSET_BITS)
+#define MATCH_OFFSET_MAX (1 << MATCH_OFFSET_BITS) - 1
 #define MATCH_LENGTH_BITS 9
-#define MATCH_LENGTH_MAX (1 << MATCH_LENGTH_BITS)
+#define MATCH_LENGTH_MAX (1 << MATCH_LENGTH_BITS) - 1
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
@@ -203,7 +203,7 @@ uint32_t record_bytes(lz_context_t* ctx, uint32_t num_bytes, uint32_t cur_relpos
         ctx->lookahead++;
         relpos++;
 
-        if (relpos == WIN_SIZE)
+        if (relpos == MATCH_OFFSET_MAX)
         {
             reindex_hashtable(ctx, relpos);
             ctx->base = ctx->base + relpos;
@@ -216,7 +216,7 @@ uint32_t record_bytes(lz_context_t* ctx, uint32_t num_bytes, uint32_t cur_relpos
         ctx->lookahead++;
         relpos++;
 
-        if (relpos == WIN_SIZE)
+        if (relpos == MATCH_OFFSET_MAX)
         {
             reindex_hashtable(ctx, relpos);
             ctx->base = ctx->base + relpos;

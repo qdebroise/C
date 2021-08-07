@@ -15,7 +15,8 @@ int main(int argc, char* argv[])
     // static const char content[] = "aacaacabcabaaac";
     // static const size_t end = sizeof(content) / sizeof(content[0]);
 
-    FILE* f = fopen("test/bible.txt", "rb");
+    FILE* f = fopen(argv[1], "rb");
+    // FILE* f = fopen("test/bible.txt", "rb");
     // FILE* f = fopen("tmp.txt", "rb");
     if (!f) return 1;
     fseek(f, 0, SEEK_END);
@@ -57,6 +58,10 @@ int main(int argc, char* argv[])
     // printf("%.*s\n", array_size(uncompressed_data), uncompressed_data);
     printf("\nUncompressed size: %lu bytes\n", array_size(uncompressed_data));
     printf("Original size: %lu bytes\n", end);
+
+    FILE* fout = fopen("decompressed_file", "wb");
+    fwrite(uncompressed_data, 1, array_size(uncompressed_data), fout);
+    fclose(fout);
 
     array_free(compressed_data);
     array_free(uncompressed_data);
