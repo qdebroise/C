@@ -5,6 +5,7 @@
 // https://github.com/ebiggers/libdeflate/blob/fbada10aa9da4ed8145a026a80cedff9601fb874/lib/hc_matchfinder.h
 
 #include "lz.h"
+
 #include "array.h"
 
 #include <stdint.h>
@@ -234,6 +235,9 @@ void emit_reference(lz_context_t* ctx, uint16_t offset, uint16_t length)
     // Offset is on 15 bits, length is on 9 bits. Store the length 9th bit in the highest bit of the offset 16 bit value.
     uint8_t shift = WIN_BITS;
 
+    // @Todo: length range currently from 0 to 511, since we have a min length of 3 before emitting a reference we can
+    // have lengths in the range 0 + MIN_LEN to 511 + MIN_LEN. We simply shift averything by MIN_LEN. Thus an encoded length
+    // of 0 is actualy MIN_LEN and more generally an encoded length of L really is L + MIN_LEN.
     uint16_t len_extra_bit = (length & (1 << 8)) >> 8;
     uint8_t len = length & ((1 << 8) - 1);
     uint16_t off = (offset & WIN_MASK) | (len_extra_bit << shift);
