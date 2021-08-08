@@ -195,7 +195,7 @@ static inline void bitarray_push(bitarray_t* ba, uint8_t bit)
 {
     assert(ba);
 
-    size_t bytes_allocated = array_size(ba->data);
+    size_t bytes_allocated = array_capacity(ba->data);
 
     if (ba->size == bytes_allocated * 8)
     {
@@ -212,7 +212,7 @@ static inline void bitarray_push_bits_lsb(bitarray_t* ba, uint64_t bits, size_t 
 {
     assert(ba);
 
-    size_t bytes_allocated = array_size(ba->data);
+    size_t bytes_allocated = array_capacity(ba->data);
 
     if (ba->size + n >= bytes_allocated * 8)
     {
@@ -232,7 +232,7 @@ static inline void bitarray_push_bits_msb(bitarray_t* ba, uint64_t bits, size_t 
 {
     assert(ba);
 
-    size_t bytes_allocated = array_size(ba->data);
+    size_t bytes_allocated = array_capacity(ba->data);
 
     if (ba->size + n >= bytes_allocated * 8)
     {

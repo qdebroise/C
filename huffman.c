@@ -164,7 +164,6 @@ uint8_t* huffman_tree(const uint8_t* input, size_t size)
         if (frequencies[sorted_frequencies[i]] == 0) continue;
 
         tb.nodes[tb.next_free_node] = (node_t){
-            // .byte = (uint8_t)i,
             .byte = (uint8_t)sorted_frequencies[i],
             .freq = frequencies[sorted_frequencies[i]],
             .left = UINT32_MAX,
@@ -178,9 +177,8 @@ uint8_t* huffman_tree(const uint8_t* input, size_t size)
 
     // @Note @Todo: N nodes in the tree will result in a maximum new nodes of N - 1. Thus we can have a maximum of 256 + 256 - 1 nodes = 511.
 
-    // Build huffman tree from the sorted frequencies.
-    // @Todo: see wiki page of huffman tree for O(n) algorithm to build the Huffman tree from
-    // a sorted list of frequencies. https://en.wikipedia.org/wiki/Huffman_coding#Compression
+    // Build huffman tree from the sorted frequencies in O(n) look here for the algorithm
+    // https://en.wikipedia.org/wiki/Huffman_coding#Compression
     while (tb.queue_1_size + tb.queue_2_size >= 2)
     {
         uint32_t node1 = select_node(&tb);
@@ -201,13 +199,11 @@ uint8_t* huffman_tree(const uint8_t* input, size_t size)
         tb.queue_2_size++;
     }
 
+#ifndef NDEBUG
     // The resulting node is always in the second queue. @Todo: unless there is only one node in queue1 at first.
     uint32_t root = tb.queue_2[tb.queue_2_head];
-#ifndef NDEBUG
     write_graph(&tb, root); // @Cleanup: remove, or keep for debug only.
 #endif
-
-    // @Todo: build codewords. Iterate the tree for each symol and write its codeword. Skip if frequence is empty.
 
     // @Note: this is the number of nodes added in queue_1 during initialization.
     // We know for certain that these N first nodes are the leaves of the tree.
@@ -221,7 +217,7 @@ uint8_t* huffman_tree(const uint8_t* input, size_t size)
             uint32_t parent = tb.nodes[current].parent;
             if (tb.nodes[parent].left == current)
             {
-                // Write 0.
+                // Write 0 (already initialized to 0).
                 codewords[byte].num_bits++;
             }
             else
@@ -241,12 +237,13 @@ uint8_t* huffman_tree(const uint8_t* input, size_t size)
         // printf("0x%x %d\n", i, codewords[i].num_bits);
     // }
 
-    // @Todo: ASAN dies here. Something it deoesn't like about bitarrays :/.
-    // @Todo: pass over the input and compress using the codewords. As simple as that :)
+    // @Note @Todo: pass over the input and compress using the codewords. As simple as that :)
     const uint8_t* it = input;
     const uint8_t* end = input + size;
     while (it != end)
     {
+        // @Todo @Performance: see if it is better to have a buffer of bits on a uint64_t and
+        // push only when it is full.
         bitarray_push_bits_msb(&output, codewords[*it].bits, codewords[*it].num_bits);
         it++;
     }

@@ -49,22 +49,21 @@ int main(int argc, char* argv[])
     toc = clock();
     float uncompression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
 
-    printf("LZ:\n\tInput size: %f Mb\n\tOutput size: %f Mb\n\tCompression rate (%%): %.3f\n\tCompression time (s): %f\n\tUncompression time (s): %f\n",
+    printf("LZ:\n\tInput size (Mb): %f\n\tOutput size (Mb): %f\n\tCompression rate (%%): %.3f\n\tCompression time (s): %f\n\tUncompression time (s): %f\n",
             (float)end / (1 << 20),
             (float)array_size(compressed_data) / (1 << 20),
             (1 - array_size(compressed_data) / (float)array_size(uncompressed_data)) * 100,
             compression_time_s, uncompression_time_s);
-    printf("Huffman:\n\tInput size: %f Mb\n\tOutput size: %f Mb\n\tCompression rate (%%): %.3f\n\tHuffman time (s): %.3f\n",
+    printf("Huffman:\n\tInput size (Mb): %f\n\tOutput size (Mb): %f\n\tCompression rate (%%): %.3f\n\tHuffman time (s): %.3f\n",
             (float)array_size(compressed_data) / (1 << 20),
             (float)array_size(huffman_output) / (1 << 20),
             (1 - array_size(huffman_output) / (float)array_size(compressed_data)) * 100,
             huffman_time_s);
-    printf("Total (LZ + Huffman):\n\tInput size: %f Mb\n\tOutput size: %f Mb\n\tCompression rate (%%): %.3f\n\tCompression time (s): %.3f\n",
+    printf("Total (LZ + Huffman):\n\tInput size (Mb): %f\n\tOutput size (Mb): %f\n\tCompression rate (%%): %.3f\n\tCompression time (s): %.3f\n",
             (float)array_size(uncompressed_data) / (1 << 20),
             (float)array_size(huffman_output) / (1 << 20),
             (1 - array_size(huffman_output) / (float)array_size(uncompressed_data)) * 100,
             compression_time_s + huffman_time_s);
-
     /*
     printf("LZ compressed data stream:\n");
     for (size_t i = 0; i < array_size(compressed_data); ++i)
