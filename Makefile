@@ -2,10 +2,12 @@ TARGET := a.out
 
 SOURCES := \
 	lz.c \
+	huffman.c \
 	test/lz_test.c \
 
 INCLUDES := \
-	lz.h
+	lz.h \
+	huffman.h \
 
 .PHONY: all
 all: $(TARGET)

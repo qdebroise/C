@@ -1,4 +1,5 @@
 #include "array.h"
+#include "huffman.h"
 #include "lz.h"
 
 #include <stdio.h>
@@ -34,6 +35,14 @@ int main(int argc, char* argv[])
     toc = clock();
     float compression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
 
+    // @Todo: put huffman compression outside for now. Later on lz + huffman will be combined to yield a single compression function.
+    // For now, for easier debugging and algorithm building the two are seperated.
+    printf("Start Huffman compression\n");
+    tic = clock();
+    uint8_t* huffman_output = huffman_tree(compressed_data, array_size(compressed_data));
+    toc = clock();
+    float huffman_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
+
     printf("Start LZ decompression\n");
     tic = clock();
     uint8_t* uncompressed_data = lz_uncompress(compressed_data, array_size(compressed_data));
@@ -45,6 +54,11 @@ int main(int argc, char* argv[])
             (float)array_size(compressed_data) / (1 << 20),
             (1 - array_size(compressed_data) / (float)array_size(uncompressed_data)) * 100,
             compression_time_s, uncompression_time_s);
+    printf("Huffman:\n\tInput size: %f Mb\n\tOutput size: %f Mb\n\tCompression rate (%%): %.3f\n\tHuffman time (s): %.3f\n",
+            (float)array_size(compressed_data) / (1 << 20),
+            (float)array_size(huffman_output) / (1 << 20),
+            (1 - array_size(huffman_output) / (float)array_size(compressed_data)) * 100,
+            huffman_time_s);
 
     /*
     printf("LZ compressed data stream:\n");
@@ -56,8 +70,8 @@ int main(int argc, char* argv[])
     */
 
     // printf("%.*s\n", array_size(uncompressed_data), uncompressed_data);
-    printf("\nUncompressed size: %lu bytes\n", array_size(uncompressed_data));
-    printf("Original size: %lu bytes\n", end);
+    printf("\nOriginal size: %lu bytes\n", end);
+    printf("LZ uncompressed size: %lu bytes\n", array_size(uncompressed_data));
 
     FILE* fout = fopen("decompressed_file", "wb");
     fwrite(uncompressed_data, 1, array_size(uncompressed_data), fout);
