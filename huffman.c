@@ -8,13 +8,11 @@ typedef struct node_t
     size_t freq;
     uint32_t left;
     uint32_t right;
+    uint32_t parent;
 } node_t;
 
 typedef struct tree_builder_t
 {
-    // Build huffman tree from the sorted frequencies.
-    // @Todo: see wiki page of huffman tree for O(n) algorithm to build the Huffman tree from
-    // a sorted list of frequencies. https://en.wikipedia.org/wiki/Huffman_coding#Compression
     node_t nodes[511];
     uint32_t next_free_node;
     uint32_t queue_1[256]; // Indirection into `nodes`.
@@ -88,6 +86,9 @@ uint32_t select_node(tree_builder_t* tb)
 
 #ifndef NDEBUG
 #include <stdio.h>
+// Write graph in a file using DOT graph language.
+// Nodes names are "X-Y" where X is the node index in tree_builder->nodes.
+// Y is the byte in hexadecimal.
 void write_graph(const tree_builder_t* tb, uint32_t root)
 {
     uint32_t stack[512];
@@ -156,6 +157,7 @@ uint8_t* huffman_tree(const uint8_t* bytes, size_t size)
     init_tree_builder(&tb);
 
     // Initialize the nodes.
+    uint32_t num_valid_frequencies = 0;
     for (size_t i = 0; i < 256; ++i)
     {
         // If the frequency is 0 then there is no need for the byte to appear in the tree.
@@ -167,25 +169,20 @@ uint8_t* huffman_tree(const uint8_t* bytes, size_t size)
             .freq = frequencies[sorted_frequencies[i]],
             .left = UINT32_MAX,
             .right = UINT32_MAX,
+            .parent = UINT32_MAX,
         };
         tb.queue_1[tb.queue_1_size] = tb.next_free_node++;
         tb.queue_1_size++;
+        num_valid_frequencies++;
     }
 
     // @Note @Todo: N nodes in the tree will result in a maximum new nodes of N - 1. Thus we can have a maximum of 256 + 256 - 1 nodes = 511.
 
+    // Build huffman tree from the sorted frequencies.
+    // @Todo: see wiki page of huffman tree for O(n) algorithm to build the Huffman tree from
+    // a sorted list of frequencies. https://en.wikipedia.org/wiki/Huffman_coding#Compression
     while (tb.queue_1_size + tb.queue_2_size >= 2)
     {
-        // @Todo
-        // node1 = if freq head q1 < freq head q2 pop q1 otherwise pop q2.
-        // node2 = if freq head q1 < freq head q2 pop q1 otherwise pop q2.
-        //
-        // new_node.left = node1;
-        // new_node.right = node2;
-        // new_node.freq = node1.freq + node2.freq;
-        //
-        // q2 push new_node.
-
         uint32_t node1 = select_node(&tb);
         uint32_t node2 = select_node(&tb);
 
@@ -195,7 +192,10 @@ uint8_t* huffman_tree(const uint8_t* bytes, size_t size)
             .freq = tb.nodes[node1].freq + tb.nodes[node2].freq,
             .left = node1,
             .right = node2,
+            .parent = UINT32_MAX,
         };
+        tb.nodes[node1].parent = new_node;
+        tb.nodes[node2].parent = new_node;
 
         tb.queue_2[(tb.queue_2_head + tb.queue_2_size) % 256] = new_node;
         tb.queue_2_size++;
@@ -203,11 +203,41 @@ uint8_t* huffman_tree(const uint8_t* bytes, size_t size)
 
     // The resulting node is always in the second queue. @Todo: unless there is only one node in queue1 at first.
     uint32_t root = tb.queue_2[tb.queue_2_head];
-    write_graph(&tb, root);
+    write_graph(&tb, root); // @Cleanup: remove, or keep for debug only.
 
-    // @Todo: write codewords. Iterate the tree for each symol and write its codeword. Skip if frequence is empty.
+    // @Todo: build codewords. Iterate the tree for each symol and write its codeword. Skip if frequence is empty.
 
-    codeword_t codewords[256]; // The index is the byte.
+    // @Note: this is the number of nodes added in queue_1 during initialization.
+    // We know for certain that these N first nodes are the leaves of the tree.
+    codeword_t codewords[256] = {0}; // The index is the byte.
+    for (int i = 0; i < num_valid_frequencies; ++i)
+    {
+        uint32_t current = i;
+        uint8_t byte = tb.nodes[current].byte;
+        while (tb.nodes[current].parent != UINT32_MAX)
+        {
+            uint32_t parent = tb.nodes[current].parent;
+            if (tb.nodes[parent].left == current)
+            {
+                // Write 0.
+                codewords[byte].num_bits++;
+            }
+            else
+            {
+                // Write 1.
+                codewords[byte].bits |= (1 << codewords[i].num_bits);
+                codewords[byte].num_bits++;
+            }
+
+            current = parent;
+        }
+    }
+
+    // @Cleanup: for debug purposes only. Remove when done.
+    // for (int i = 0; i < num_valid_frequencies; ++i)
+    // {
+        // printf("0x%x %d\n", i, codewords[i].num_bits);
+    // }
 
     bitarray_pad_last_byte(&output);
     return output.data;
