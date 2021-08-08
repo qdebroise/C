@@ -39,7 +39,7 @@ int main(int argc, char* argv[])
     // For now, for easier debugging and algorithm building the two are seperated.
     printf("Start Huffman compression\n");
     tic = clock();
-    uint8_t* huffman_output = huffman_tree(compressed_data, array_size(compressed_data));
+    uint8_t* huffman_output = huffman_compress(compressed_data, array_size(compressed_data));
     toc = clock();
     float huffman_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
 
