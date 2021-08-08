@@ -143,7 +143,7 @@ uint8_t* huffman_tree(const uint8_t* bytes, size_t size)
     {
         for (size_t j = 0; j < 256 - i - 1; ++j)
         {
-            if (frequencies[sorted_frequencies[j]] < frequencies[sorted_frequencies[j + 1]])
+            if (frequencies[sorted_frequencies[j]] > frequencies[sorted_frequencies[j + 1]])
             {
                 size_t swap = sorted_frequencies[j + 1];
                 sorted_frequencies[j + 1] = sorted_frequencies[j];
@@ -168,7 +168,7 @@ uint8_t* huffman_tree(const uint8_t* bytes, size_t size)
             .left = UINT32_MAX,
             .right = UINT32_MAX,
         };
-        tb.queue_1[i] = tb.next_free_node++;
+        tb.queue_1[tb.queue_1_size] = tb.next_free_node++;
         tb.queue_1_size++;
     }
 
