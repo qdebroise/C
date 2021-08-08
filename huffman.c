@@ -120,7 +120,7 @@ void write_graph(const tree_builder_t* tb, uint32_t root)
 }
 #endif
 
-uint8_t* huffman_tree(const uint8_t* bytes, size_t size)
+uint8_t* huffman_tree(const uint8_t* input, size_t size)
 {
     bitarray_t output = {0};
 
@@ -129,7 +129,7 @@ uint8_t* huffman_tree(const uint8_t* bytes, size_t size)
 
     for (size_t i = 0; i < size; ++i)
     {
-        frequencies[bytes[i]]++;
+        frequencies[input[i]]++;
     }
 
     // Sort frequencies in increasing order.
@@ -203,7 +203,9 @@ uint8_t* huffman_tree(const uint8_t* bytes, size_t size)
 
     // The resulting node is always in the second queue. @Todo: unless there is only one node in queue1 at first.
     uint32_t root = tb.queue_2[tb.queue_2_head];
+#ifndef NDEBUG
     write_graph(&tb, root); // @Cleanup: remove, or keep for debug only.
+#endif
 
     // @Todo: build codewords. Iterate the tree for each symol and write its codeword. Skip if frequence is empty.
 
@@ -238,6 +240,16 @@ uint8_t* huffman_tree(const uint8_t* bytes, size_t size)
     // {
         // printf("0x%x %d\n", i, codewords[i].num_bits);
     // }
+
+    // @Todo: ASAN dies here. Something it deoesn't like about bitarrays :/.
+    // @Todo: pass over the input and compress using the codewords. As simple as that :)
+    const uint8_t* it = input;
+    const uint8_t* end = input + size;
+    while (it != end)
+    {
+        bitarray_push_bits_msb(&output, codewords[*it].bits, codewords[*it].num_bits);
+        it++;
+    }
 
     bitarray_pad_last_byte(&output);
     return output.data;

@@ -35,7 +35,7 @@ int main(int argc, char* argv[])
     toc = clock();
     float compression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
 
-    // @Todo: put huffman compression outside for now. Later on lz + huffman will be combined to yield a single compression function.
+    // @Note @Todo: put huffman compression outside for now. Later on lz + huffman will be combined to yield a single compression function.
     // For now, for easier debugging and algorithm building the two are seperated.
     printf("Start Huffman compression\n");
     tic = clock();
@@ -59,6 +59,11 @@ int main(int argc, char* argv[])
             (float)array_size(huffman_output) / (1 << 20),
             (1 - array_size(huffman_output) / (float)array_size(compressed_data)) * 100,
             huffman_time_s);
+    printf("Total (LZ + Huffman):\n\tInput size: %f Mb\n\tOutput size: %f Mb\n\tCompression rate (%%): %.3f\n\tCompression time (s): %.3f\n",
+            (float)array_size(uncompressed_data) / (1 << 20),
+            (float)array_size(huffman_output) / (1 << 20),
+            (1 - array_size(huffman_output) / (float)array_size(uncompressed_data)) * 100,
+            compression_time_s + huffman_time_s);
 
     /*
     printf("LZ compressed data stream:\n");
@@ -79,6 +84,7 @@ int main(int argc, char* argv[])
 
     array_free(compressed_data);
     array_free(uncompressed_data);
+    array_free(huffman_output);
     free(content);
 
     return 0;
