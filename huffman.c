@@ -240,6 +240,17 @@ uint32_t build_huffman_tree(huffman_tree_o* tree, const frequencies_t* freq)
     return num_used_symbols;
 }
 
+// Constructs a canonical Huffman tree.
+//
+// A canonical Huffman tree is one Huffman tree amongst the several tree possibilities of a given alphabet.
+// This tree fits additional rules making it very easy to describe in a compact format.
+//
+uint32_t build_canonical_huffman_tree(huffman_tree_o* tree, const frequencies_t* freq)
+{
+    // @Todo: impl.
+    // @Todo: limit length codes to length L (Deflate uses 15).
+}
+
 void build_codewords(const huffman_tree_o* tree, codeword_t* codewords, uint32_t num_used_symbols)
 {
     // We know that the first N nodes in `nodes` are the leaves of the tree. Thus, we can iterate
