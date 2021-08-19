@@ -5,14 +5,14 @@
 // Ref:
 // "A Fast and Space-Economical Algorithm for Length-Limited Coding", 1995, Moffat et. al.
 // https://doi.org/10.1007/BFb0015404
+#include "package_merge.h"
 
 #include <assert.h>
 #include <stdbool.h>
-#include <stdint.h>
 
-#define NULL_NODE_REF UINT16_MAX
+#define NULL_CHAIN_REF UINT16_MAX
 #define FREQ_MAX UINT32_MAX
-#define LIMIT_MAX 32 // Allows for 2^32 symbols which propably more than anyone would need.
+#define LIMIT_MAX 32 // Allows for 2^32 symbols which is propably more than anyone would ever need.
 
 typedef struct chain_t
 {
@@ -29,26 +29,26 @@ typedef struct freelist_t
 
 } freelist_t;
 
-uint16_t alloc_node(freelist_t* fl, chain_t* nodes)
+uint16_t alloc_chain(freelist_t* fl, const chain_t* chains)
 {
-    if (fl->next_free == NULL_NODE_REF) return fl->size++;
+    if (fl->next_free == NULL_CHAIN_REF) return fl->size++;
     uint16_t new = fl->next_free;
-    fl->next_free = nodes[new].weight;
+    fl->next_free = chains[new].weight;
     return new;
 }
 
-void release_node(freelist_t* fl, chain_t* nodes, uint32_t node_index)
+void release_chain(freelist_t* fl, chain_t* chains, uint32_t chain_index)
 {
-    assert(node_index != NULL_NODE_REF);
+    assert(chain_index != NULL_CHAIN_REF);
 
-    nodes[node_index].weight = fl->next_free;
-    nodes[node_index].count = -1;
-    nodes[node_index].tail = NULL_NODE_REF;
-    fl->next_free = node_index;
+    chains[chain_index].weight = fl->next_free;
+    chains[chain_index].count = -1;
+    chains[chain_index].tail = NULL_CHAIN_REF;
+    fl->next_free = chain_index;
 }
 
-// Compute optimal length-limited prefix codes from an ordered set of frequencies. The frequencies
-// *MUST* be sorted in increasing order.
+// Compute optimal length-limited prefix code lengths from an ordered set of frequencies using
+// boudary package-merge algorithm. The frequencies *MUST* be sorted in ascending order.
 // Codes lengths of every symbol are returned in the `code_lengths` parameter which *MUST* be large
 // enough to receive the `n` codes lengths.
 // `limit` is the maximum code length allowed for the symbols.
@@ -73,17 +73,17 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
     // we only store the rightmost chain. We know that a chain in list l can contain up to l
     // elements (other chains including itself) because a chain in list l always link to an element
     // in list l-1. Thus, list l can have at most l chains, list l-1 has at most l-1 and so on.
-    // Therefore, the total number of nodes is '1 + 2 + .. + L = L(L + 1)/2'.
+    // Therefore, the total number of chains is '1 + 2 + .. + L = L(L + 1)/2'.
     // In addition, we have to account for the new chain being created. Indeed, the chain creation
     // happens before any other chain currently stored is released, hence we need to add an extra
-    // chain giving us the total number of nodes to be 'M = L(L + 1)/2 + 1'.
+    // chain giving us the total number of chains to be 'M = L(L + 1)/2 + 1'.
     //
     // @Todo: allocate on the heap.
-    chain_t nodes[limit*(limit + 1) / 2 + 1];
+    chain_t chains[limit*(limit + 1) / 2 + 1];
     freelist_t fl = (freelist_t){
         .capacity = limit*(limit + 1) / 2 + 1,
         .size = 0,
-        .next_free = NULL_NODE_REF,
+        .next_free = NULL_CHAIN_REF,
     };
 
     // A stack is used to simulate recursion. We know for certain that the stack can never grow
@@ -122,11 +122,11 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
     {
         weights[i] = freqs[0];
 
-        uint16_t new = alloc_node(&fl, &nodes[0]);
-        nodes[new] = (chain_t){
+        uint16_t new = alloc_chain(&fl, &chains[0]);
+        chains[new] = (chain_t){
             .weight = freqs[1],
             .count = 2,
-            .tail = NULL_NODE_REF,
+            .tail = NULL_CHAIN_REF,
         };
         lists[i] = new;
     }
@@ -135,32 +135,32 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
     uint8_t current = limit - 1;
     for (uint32_t i = 2; i < 2 * n - 2;)
     {
-        uint16_t new = alloc_node(&fl, &nodes[0]);
+        uint16_t new = alloc_chain(&fl, &chains[0]);
         // At every iteration we add a chain in `current` list which becomes the rightmost chain.
         // We aggressively try to collect the previous rightmost chain every time.
         uint16_t to_free = lists[current];
 
-        chain_t current_node = nodes[lists[current]];
-        uint32_t freq = current_node.count >= n ? FREQ_MAX : freqs[current_node.count];
-        uint32_t s = current == 0 ? 0 : weights[current - 1] + nodes[lists[current - 1]].weight;
+        chain_t current_chain = chains[lists[current]];
+        uint32_t freq = current_chain.count >= n ? FREQ_MAX : freqs[current_chain.count];
+        uint32_t s = current == 0 ? 0 : weights[current - 1] + chains[lists[current - 1]].weight;
 
-        weights[current] = nodes[lists[current]].weight;
+        weights[current] = chains[lists[current]].weight;
 
         if (current == 0 || s > freq)
         {
             // Step 1 & 3a (c.f. paper).
-            nodes[new] = (chain_t){
+            chains[new] = (chain_t){
                 .weight = freq,
-                .count = current_node.count + 1,
-                .tail = current == 0 ? NULL_NODE_REF : nodes[lists[current]].tail,
+                .count = current_chain.count + 1,
+                .tail = current == 0 ? NULL_CHAIN_REF : chains[lists[current]].tail,
             };
         }
         else
         {
             // Step 3b (c.f. paper).
-            nodes[new] = (chain_t){
+            chains[new] = (chain_t){
                 .weight = s,
-                .count = current_node.count,
+                .count = current_chain.count,
                 .tail = lists[current - 1],
             };
 
@@ -170,7 +170,7 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
 
         lists[current] = new;
 
-        // A new node was added into the last list which brings us closer to our goal: "The need for
+        // A new chain was added into the last list which brings us closer to our goal: "The need for
         // 2n-2 chains in list L again drives the process." (quoted from the original paper).
         if (current == limit - 1)
         {
@@ -181,8 +181,8 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
         if (current == limit - 1)
         {
             // We can always free safely from the last list.
-            uint16_t next = nodes[to_free].tail;
-            release_node(&fl, &nodes[0], to_free);
+            uint16_t next = chains[to_free].tail;
+            release_chain(&fl, &chains[0], to_free);
             to_free = next;
             current--;
         }
@@ -191,30 +191,30 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
         // chains.
         // This impacts performance a bit but ensures minimal memory usage.
         // @Todo: maybe there is a clever way to avoid all this checking process...
-        while (to_free != NULL_NODE_REF)
+        while (to_free != NULL_CHAIN_REF)
         {
-            bool is_node_used = false;
-            for (uint8_t i = current; i < limit; ++i)
+            bool is_chain_used = false;
+            for (uint8_t l = current + 1; l < limit; ++l)
             {
-                uint16_t node_index = lists[i];
-                while (node_index != to_free && node_index != NULL_NODE_REF)
+                uint16_t chain_index = lists[l];
+                while (chain_index != to_free && chain_index != NULL_CHAIN_REF)
                 {
-                    node_index = nodes[node_index].tail;
+                    chain_index = chains[chain_index].tail;
                 }
 
-                if (node_index == to_free)
+                if (chain_index == to_free)
                 {
-                    is_node_used = true;
+                    is_chain_used = true;
                     break;
                 }
             }
 
-            // The node is still tied to some node at the start of a list. So at this point, we have
-            // freed everything we could.
-            if (is_node_used) break;
+            // The chain is still tied to some other chain at the start of a list. So at this point,
+            // we have freed everything we could.
+            if (is_chain_used) break;
 
-            uint16_t next = nodes[to_free].tail;
-            release_node(&fl, &nodes[0], to_free);
+            uint16_t next = chains[to_free].tail;
+            release_chain(&fl, &chains[0], to_free);
             to_free = next;
             current--;
         }
@@ -229,17 +229,24 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
         }
     }
 
-    // Avoid creating the 'a' list of active nodes shown in the paper. Instead, we directly use the
+    // Avoid creating the 'a' list of active leaves shown in the paper. Instead, we directly use the
     // chain's value to populate the codes lengths array.
+    // Example:
+    // Given the array of active leaves [4, 6, 6] (with n=6, limit=3), one can retrieve the codes
+    // lengths as:
+    // - 4 symbols (4 - 0) of length 3
+    // - 2 symbols (6 - 4) of length 2
+    // - 0 symbols (0 - 0) of length 1
+    // Giving the code length array [3, 3, 3, 3, 2, 2].
     uint8_t code_len = 1;
-    uint16_t node_index = lists[limit - 1];
+    uint16_t chain_index = lists[limit - 1];
     uint32_t symbol_idx = n;
-    while (node_index != NULL_NODE_REF)
+    while (chain_index != NULL_CHAIN_REF)
     {
-        uint16_t next = nodes[node_index].tail;
-        uint16_t num_symbols_with_len = next == NULL_NODE_REF
-            ? nodes[node_index].count
-            : nodes[node_index].count - nodes[next].count;
+        uint16_t next = chains[chain_index].tail;
+        uint16_t num_symbols_with_len = next == NULL_CHAIN_REF
+            ? chains[chain_index].count
+            : chains[chain_index].count - chains[next].count;
         for (uint16_t j = 0; j < num_symbols_with_len; ++j)
         {
             code_lengths[--symbol_idx] = code_len;
@@ -247,50 +254,7 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
 
         assert(symbol_idx <= n && "It tried to add more code lengths than there are symbols.");
 
-        node_index = next;
+        chain_index = next;
         code_len++;
     }
-}
-
-#include <stdio.h>
-
-void check_results(const uint32_t* results, const uint32_t* expected, size_t n)
-{
-    // printf("Code lengths (L=%d): [", limit);
-    printf("[");
-    for (size_t i = 0; i < n; ++i)
-    {
-        printf("%d, ", expected[i]);
-    }
-    printf("]\n");
-
-    for (size_t i = 0; i < n; ++i)
-    {
-        assert(results[i] == expected[i]);
-    }
-}
-
-int main(int argc, char* argv[])
-{
-    uint32_t frequencies[] = {1, 1, 5, 7, 10, 14};
-    uint32_t n = sizeof(frequencies) / sizeof(frequencies[0]);
-    uint32_t code_length[n];
-
-    uint32_t expected_length_3[] = {3, 3, 3, 3, 2, 2};
-    uint32_t expected_length_4[] = {4, 4, 3, 2, 2, 2};
-    uint32_t expected_length_5[] = {5, 5, 4, 3, 2, 1};
-    uint32_t expected_length_7[] = {5, 5, 4, 3, 2, 1};
-    uint32_t expected_length_15[] = {5, 5, 4, 3, 2, 1};
-
-    package_merge(&frequencies[0], n, 3, &code_length[0]); check_results(code_length, expected_length_3, n);
-    package_merge(&frequencies[0], n, 4, &code_length[0]); check_results(code_length, expected_length_4, n);
-    package_merge(&frequencies[0], n, 5, &code_length[0]); check_results(code_length, expected_length_5, n);
-    package_merge(&frequencies[0], n, 7, &code_length[0]); check_results(code_length, expected_length_7, n);
-    package_merge(&frequencies[0], n, 15, &code_length[0]); check_results(code_length, expected_length_15, n);
-    package_merge(&frequencies[0], n, 32, &code_length[0]);
-
-    uint32_t frequencies2[] = {1, 2, 4, 8, 16, 32, 124, 126, 1000, 1432, 1563, 2048};
-    uint32_t n2 = sizeof(frequencies2) / sizeof(frequencies2[0]);
-    uint32_t code_length2[n2];
-    package_merge(&frequencies2[0], n2, 7, &code_length2[0]);
 }
