@@ -9,6 +9,7 @@
 
 #include <assert.h>
 #include <stdbool.h>
+#include <stdlib.h>
 
 #define NULL_CHAIN_REF UINT16_MAX
 #define FREQ_MAX UINT32_MAX
@@ -16,7 +17,6 @@
 
 typedef struct chain_t
 {
-    uint32_t weight;
     uint32_t count;
     uint16_t tail;
 } chain_t;
@@ -33,7 +33,7 @@ uint16_t alloc_chain(freelist_t* fl, const chain_t* chains)
 {
     if (fl->next_free == NULL_CHAIN_REF) return fl->size++;
     uint16_t new = fl->next_free;
-    fl->next_free = chains[new].weight;
+    fl->next_free = (uint16_t)chains[new].count;
     return new;
 }
 
@@ -41,8 +41,7 @@ void release_chain(freelist_t* fl, chain_t* chains, uint32_t chain_index)
 {
     assert(chain_index != NULL_CHAIN_REF);
 
-    chains[chain_index].weight = fl->next_free;
-    chains[chain_index].count = -1;
+    chains[chain_index].count = fl->next_free;
     chains[chain_index].tail = NULL_CHAIN_REF;
     fl->next_free = chain_index;
 }
@@ -77,11 +76,10 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
     // In addition, we have to account for the new chain being created. Indeed, the chain creation
     // happens before any other chain currently stored is released, hence we need to add an extra
     // chain giving us the total number of chains to be 'M = L(L + 1)/2 + 1'.
-    //
-    // @Todo: allocate on the heap.
-    chain_t chains[limit*(limit + 1) / 2 + 1];
+    uint32_t min_num_chains = limit * (limit + 1) / 2 + 1;
+    chain_t* chains = malloc(min_num_chains * sizeof(chain_t));
     freelist_t fl = (freelist_t){
-        .capacity = limit*(limit + 1) / 2 + 1,
+        .capacity = min_num_chains,
         .size = 0,
         .next_free = NULL_CHAIN_REF,
     };
@@ -112,19 +110,19 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
 
     // Stores the rightmost chain of each list.
     uint16_t lists[limit];
-    // Because in a list only the rightmost chain is stored, we need to keep track of the weight of
-    // the chain before the last to manage lookahead chains comparisons.
+    // Weights don't need to be stored in the chains. We only need the sum of the two lookahead
+    // chains of a list. Thus, we simply need to add the weight of the new node to the sum of
+    // weights and reset the weight of list l-1 to 0 when recursing.
     uint32_t weights[limit];
 
     // The algorithm starts with the two lookahead chains for each list, that is:
     // weights freqs[0] and freqs[1].
     for (uint8_t i = 0; i < limit; ++i)
     {
-        weights[i] = freqs[0];
+        weights[i] = freqs[0] + freqs[1];
 
         uint16_t new = alloc_chain(&fl, &chains[0]);
         chains[new] = (chain_t){
-            .weight = freqs[1],
             .count = 2,
             .tail = NULL_CHAIN_REF,
         };
@@ -142,27 +140,26 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
 
         chain_t current_chain = chains[lists[current]];
         uint32_t freq = current_chain.count >= n ? FREQ_MAX : freqs[current_chain.count];
-        uint32_t s = current == 0 ? 0 : weights[current - 1] + chains[lists[current - 1]].weight;
-
-        weights[current] = chains[lists[current]].weight;
+        uint32_t s = current == 0 ? 0 : weights[current - 1];
 
         if (current == 0 || s > freq)
         {
             // Step 1 & 3a (c.f. paper).
             chains[new] = (chain_t){
-                .weight = freq,
                 .count = current_chain.count + 1,
                 .tail = current == 0 ? NULL_CHAIN_REF : chains[lists[current]].tail,
             };
+            weights[current] += freq;
         }
         else
         {
             // Step 3b (c.f. paper).
             chains[new] = (chain_t){
-                .weight = s,
                 .count = current_chain.count,
                 .tail = lists[current - 1],
             };
+            weights[current - 1] = 0;
+            weights[current] += s;
 
             stack[stack_size++] = current - 1;
             stack[stack_size++] = current - 1;
@@ -257,4 +254,6 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
         chain_index = next;
         code_len++;
     }
+
+    free(chains);
 }
