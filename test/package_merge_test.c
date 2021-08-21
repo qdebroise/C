@@ -31,6 +31,8 @@ bool check_results(const uint32_t* results, const uint32_t* expected, size_t n)
 
 int main(int argc, char* argv[])
 {
+    //@Todo: update the tests.
+
     uint32_t frequencies[] = {1, 1, 5, 7, 10, 14};
     uint32_t n = sizeof(frequencies) / sizeof(frequencies[0]);
     uint32_t code_length[n];

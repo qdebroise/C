@@ -53,10 +53,10 @@ void release_chain(freelist_t* fl, chain_t* chains, uint32_t chain_index)
 // Compute optimal length-limited prefix code lengths from an ordered set of frequencies using
 // boudary package-merge algorithm. The frequencies *MUST* be sorted in ascending order and be free
 // of symbols with a frequency of 0.
-// Codes lengths of every symbol are returned in the `code_lengths` parameter which *MUST* be large
-// enough to receive the `n` codes lengths.
+// Active leaves for each list is returned in the `active_leaves` parameter which *MUST* be large
+// enough to receive `limit` number of values.
 // `limit` is the maximum code length allowed for the symbols.
-void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* code_lengths)
+void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* active_leaves)
 {
     assert(n > 0 && "The list of frequencies is empty.");
     assert(limit <= LIMIT_MAX && "The code length limit is too big.");
@@ -123,7 +123,7 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
 
     // The algorithm starts with the two lookahead chains in each list, that is: weights `freqs[0]`
     // and `freqs[1]`.
-    assert(freqs[sorted[0]] > 0 && freqs[sorted[1]] > 0 && "Frequencies of 0 are not allowed.");
+    assert(freqs[0] > 0 && freqs[1] > 0 && "Frequencies of 0 are not allowed.");
     for (uint8_t i = 0; i < limit; ++i)
     {
         weights[i] = freqs[0] + freqs[1];
@@ -235,8 +235,8 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
         }
     }
 
-    // Avoid creating the 'a' list of active leaves shown in the paper. Instead, we directly use the
-    // chain's value to populate the codes lengths array.
+    // Fill the array counting the number of active leaves in each list. The following example shows
+    // how to retrieve the code lengths from such a list.
     // Example:
     // Given the array of active leaves [4, 6, 6] (with n=6, limit=3), one can retrieve the codes
     // lengths as:
@@ -244,24 +244,13 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
     // - 2 symbols (6 - 4) of length 2
     // - 0 symbols (6 - 6) of length 1
     // Giving the code length array [3, 3, 3, 3, 2, 2].
-    uint8_t code_len = 1;
     uint16_t chain_index = lists[limit - 1];
-    uint32_t symbol_idx = n;
+    uint8_t l = limit - 1;
     while (chain_index != NULL_CHAIN_REF)
     {
-        uint16_t next = chains[chain_index].tail;
-        uint16_t num_symbols_with_len = next == NULL_CHAIN_REF
-            ? chains[chain_index].count
-            : chains[chain_index].count - chains[next].count;
-        for (uint16_t j = 0; j < num_symbols_with_len; ++j)
-        {
-            code_lengths[--symbol_idx] = code_len;
-        }
-
-        assert(symbol_idx <= n && "It tried to add more code lengths than there are symbols.");
-
-        chain_index = next;
-        code_len++;
+        assert(l < limit && "It tried to add more active leaves than there are lists.");
+        active_leaves[l--] = chains[chain_index].count;
+        chain_index = chains[chain_index].tail;
     }
 
     free(chains);

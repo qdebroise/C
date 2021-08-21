@@ -1,15 +1,17 @@
 TARGET := a.out
 
 SOURCES := \
-	lz.c \
 	huffman.c \
+	lz.c \
+	package_merge.c \
 	test/lz_test.c \
 
 INCLUDES := \
 	array.h \
 	bitarray.h \
-	lz.h \
 	huffman.h \
+	lz.h \
+	package_merge.h \
 
 .PHONY: all
 all: $(TARGET)
