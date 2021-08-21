@@ -31,7 +31,11 @@ typedef struct freelist_t
 
 uint16_t alloc_chain(freelist_t* fl, const chain_t* chains)
 {
-    if (fl->next_free == NULL_CHAIN_REF) return fl->size++;
+    if (fl->next_free == NULL_CHAIN_REF)
+    {
+        assert(fl->size < fl->capacity && "No more nodes available.");
+        return fl->size++;
+    }
     uint16_t new = fl->next_free;
     fl->next_free = (uint16_t)chains[new].count;
     return new;
@@ -47,7 +51,8 @@ void release_chain(freelist_t* fl, chain_t* chains, uint32_t chain_index)
 }
 
 // Compute optimal length-limited prefix code lengths from an ordered set of frequencies using
-// boudary package-merge algorithm. The frequencies *MUST* be sorted in ascending order.
+// boudary package-merge algorithm. The frequencies *MUST* be sorted in ascending order and be free
+// of symbols with a frequency of 0.
 // Codes lengths of every symbol are returned in the `code_lengths` parameter which *MUST* be large
 // enough to receive the `n` codes lengths.
 // `limit` is the maximum code length allowed for the symbols.
@@ -69,10 +74,10 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
     //
     // Proof:
     // For each of the L lists (where L is `limit`, l below denotes the l-th list with 0 < l <= L)
-    // we only store the rightmost chain. We know that a chain in list l can contain up to l
-    // elements (other chains including itself) because a chain in list l always link to an element
-    // in list l-1. Thus, list l can have at most l chains, list l-1 has at most l-1 and so on.
-    // Therefore, the total number of chains is '1 + 2 + .. + L = L(L + 1)/2'.
+    // we only store the rightmost chain. Because a chain in list l always link to an element in
+    // list l-1 we know that a chain in list l can link up to l elements (other chains including
+    // itself). So, list l can have at most l chains, list l-1 has at most l-1 and so on. Therefore,
+    // the total number of chains is '1 + 2 + .. + L = L(L + 1)/2'.
     // In addition, we have to account for the new chain being created. Indeed, the chain creation
     // happens before any other chain currently stored is released, hence we need to add an extra
     // chain giving us the total number of chains to be 'M = L(L + 1)/2 + 1'.
@@ -103,20 +108,21 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
     // - S(L - l) = S(L - l) + 1, where 1 < l <= L <=> S(L - l) = l.
     //
     // @Note: Since `limit` is capped to a maximum of 32 we don't bother and can handle the full
-    // 64 bytes required for the stack when `limit`=32. If memory is an issue then stack size can be
-    // set to `limit` has proven.
+    // 64 bytes required for the stack no matter the limit. If memory is an issue then the stack
+    // size can be set to `limit` as proven.
     uint16_t stack[LIMIT_MAX];
     uint8_t stack_size = 0;
 
     // Stores the rightmost chain of each list.
     uint16_t lists[limit];
-    // Weights don't need to be stored in the chains. We only need the sum of the two lookahead
-    // chains of a list. Thus, we simply need to add the weight of the new node to the sum of
-    // weights and reset the weight of list l-1 to 0 when recursing.
+    // Weights don't need to be stored in the chains. We only need to be able to lookup the sum of
+    // the weights of the two lookahead chains of a list. Thus, we can store these summed weights
+    // in a separate list. When adding a new node we simply add its weight to the existing sum and
+    // when provoking a recursion we reset the weight of list l-1 to 0.
     uint32_t weights[limit];
 
-    // The algorithm starts with the two lookahead chains for each list, that is:
-    // weights freqs[0] and freqs[1].
+    // The algorithm starts with the two lookahead chains in each list, that is: weights `freqs[0]`
+    // and `freqs[1]`.
     for (uint8_t i = 0; i < limit; ++i)
     {
         weights[i] = freqs[0] + freqs[1];
@@ -141,6 +147,8 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
         chain_t current_chain = chains[lists[current]];
         uint32_t freq = current_chain.count >= n ? FREQ_MAX : freqs[current_chain.count];
         uint32_t s = current == 0 ? 0 : weights[current - 1];
+
+        assert(freq > 0 && "Invalid frequency of 0.");
 
         if (current == 0 || s > freq)
         {
@@ -233,7 +241,7 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
     // lengths as:
     // - 4 symbols (4 - 0) of length 3
     // - 2 symbols (6 - 4) of length 2
-    // - 0 symbols (0 - 0) of length 1
+    // - 0 symbols (6 - 6) of length 1
     // Giving the code length array [3, 3, 3, 3, 2, 2].
     uint8_t code_len = 1;
     uint16_t chain_index = lists[limit - 1];

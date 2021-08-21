@@ -76,6 +76,7 @@ int main(int argc, char* argv[])
     // printf("%.*s\n", array_size(uncompressed_data), uncompressed_data);
     printf("\nOriginal size: %lu bytes\n", end);
     printf("LZ uncompressed size: %lu bytes\n", array_size(uncompressed_data));
+    printf("LZ+Huffman uncompressed size: ??\n");
 
     FILE* fout = fopen("decompressed_file", "wb");
     fwrite(uncompressed_data, 1, array_size(uncompressed_data), fout);

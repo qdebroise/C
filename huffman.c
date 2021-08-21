@@ -2,161 +2,24 @@
 
 #include "bitarray.h"
 
+#include <stdbool.h>
+
 // This implementation of Huffman compression is designed to compress bytes. Thus a symbol of the
 // alphabet ranges in [0x00, 0xff].
 #define ALPHABET_SIZE 256
-
-// The maximum number of nodes that can compose the tree. A binary tree with N leaves can have at
-// most N - 1 additional nodes. This gives the maximum number of nodes in the tree to be N + N - 1.
-#define TREE_MAX_NODES (2 * ALPHABET_SIZE - 1)
-// Because we use indices and not pointer this Value is used to tag a node as empty.
-#define TREE_EMPTY_NODE ((uint32_t)((1ULL << 32) - 1))
-
-// Size of the queues used to build the Huffman tree.
-#define LEAVES_QUEUE_SIZE ALPHABET_SIZE
-// @Note @Todo: I think this can be at most 128 long. The only way this queue can grow is if we take two nodes from queue1 resulting in a single new node in queue2. Thus, because we have 256 nodes in queue1 we can only have 256/2=128 nodes in this queue.
-#define PARENTS_QUEUE_SIZE ALPHABET_SIZE
 
 typedef struct frequencies_t
 {
     uint32_t count[ALPHABET_SIZE]; // Frequency of every symbol in the alphabet.
     uint32_t sorted[ALPHABET_SIZE]; // Sorted version of the count array.
+    uint32_t num_used_symbols;
 } frequencies_t;
-
-typedef struct node_t
-{
-    uint8_t byte;
-    size_t freq;
-    uint32_t left;
-    uint32_t right;
-    uint32_t parent;
-} node_t;
-
-typedef struct huffman_tree_o
-{
-    struct
-    {
-        size_t size;
-        size_t head;
-        uint32_t data[LEAVES_QUEUE_SIZE]; // Indirection into `nodes`.
-    } leaves_queue;
-
-    struct
-    {
-        size_t size;
-        size_t head;
-        uint32_t data[PARENTS_QUEUE_SIZE]; // Indirection into `nodes`.
-    } parents_queue;
-
-    uint32_t next_free_node;
-    node_t nodes[TREE_MAX_NODES];
-} huffman_tree_o;
 
 typedef struct codeword_t
 {
     uint8_t num_bits;
     uint32_t bits;
 } codeword_t;
-
-void huffman_tree_init(huffman_tree_o* tree)
-{
-    tree->next_free_node = 0;
-    tree->leaves_queue.size = 0;
-    tree->leaves_queue.head = 0;
-    tree->parents_queue.size = 0;
-    tree->parents_queue.head = 0;
-
-    for (int i = 0; i < LEAVES_QUEUE_SIZE; ++i)
-    {
-        tree->leaves_queue.data[i] = TREE_EMPTY_NODE;
-    }
-
-    for (int i = 0; i < PARENTS_QUEUE_SIZE; ++i)
-    {
-        tree->parents_queue.data[i] = TREE_EMPTY_NODE;
-    }
-}
-
-uint32_t leaves_queue_dequeue(huffman_tree_o* tree)
-{
-    uint32_t selected_node = tree->leaves_queue.data[tree->leaves_queue.head];
-    tree->leaves_queue.head = (tree->leaves_queue.head + 1) % LEAVES_QUEUE_SIZE;
-    tree->leaves_queue.size--;
-    return selected_node;
-}
-
-uint32_t parents_queue_dequeue(huffman_tree_o* tree)
-{
-    uint32_t selected_node = tree->parents_queue.data[tree->parents_queue.head];
-    tree->parents_queue.head = (tree->parents_queue.head + 1) % PARENTS_QUEUE_SIZE;
-    tree->parents_queue.size--;
-    return selected_node;
-}
-
-uint32_t select_node_with_smallest_frequency(huffman_tree_o* tree)
-{
-    assert(tree->leaves_queue.size + tree->parents_queue.size >= 1 && "Both queues are empty.");
-
-    uint32_t selected_node;
-
-    if (tree->parents_queue.size == 0)
-    {
-        // Only `leaves_queue` has nodes.
-        selected_node = leaves_queue_dequeue(tree);
-    }
-    else if (tree->leaves_queue.size == 0)
-    {
-        // Only `parents_queue` has nodes.
-        selected_node = parents_queue_dequeue(tree);
-    }
-    // Both queues have nodes. Select the one with smallest frequency.
-    else if (tree->nodes[tree->leaves_queue.data[tree->leaves_queue.head]].freq <= tree->nodes[tree->parents_queue.data[tree->parents_queue.head]].freq)
-    {
-        // Select from `leaves_queue`.
-        selected_node = leaves_queue_dequeue(tree);
-    }
-    else
-    {
-        // Select from `parents_queue`.
-        selected_node = parents_queue_dequeue(tree);
-    }
-
-    return selected_node;
-}
-
-#ifndef NDEBUG
-#include <stdio.h>
-// Write graph in a file using DOT graph language.
-// Nodes names are "X-Y" where X is the node index in huffman tree nodes.
-// Y is the byte in hexadecimal.
-void write_graph(const huffman_tree_o* tree, uint32_t root)
-{
-    uint32_t stack[TREE_MAX_NODES];
-    stack[0] = root;
-    uint32_t stack_size = 1;
-
-    FILE* f = fopen("huffman_tree.txt", "w");
-    fprintf(f, "digraph G {\n");
-    while (stack_size--)
-    {
-        uint32_t current = stack[stack_size];
-
-        if (tree->nodes[current].left != TREE_EMPTY_NODE)
-        {
-            fprintf(f, "\t\"%d-%x\" -> \"%d-%x\"\n", current, tree->nodes[current].byte, (int)tree->nodes[current].left, tree->nodes[tree->nodes[current].left].byte);
-            stack[stack_size++] = tree->nodes[current].left;
-        }
-
-        if (tree->nodes[current].right != TREE_EMPTY_NODE)
-        {
-            fprintf(f, "\t\"%d-%x\" -> \"%d-%x\"\n", current, tree->nodes[current].byte, (int)tree->nodes[current].right, tree->nodes[tree->nodes[current].right].byte);
-            stack[stack_size++] = tree->nodes[current].right;
-        }
-    }
-    fprintf(f, "}");
-    fclose(f);
-}
-#endif
 
 void frequencies_init(frequencies_t* freq)
 {
@@ -167,6 +30,11 @@ void frequencies_init(frequencies_t* freq)
     }
 }
 
+// @Todo @Performance; we use the indirection quite a lot like lengths[sorted[i]], freqs[sorted[i]],
+// etc. This cause quite a lot of jumps all over the place in memory. Alphabets are rather small,
+// for my use case anyway so copying the frequencies in a sorted array should be rather cheap and
+// faster to use afterwards. Then we only need use the indirection when building codelengths for
+// symbols. Test and profile this.
 void frequencies_count_and_sort(const uint8_t* input, size_t input_size, frequencies_t* freq)
 {
     for (size_t i = 0; i < input_size; ++i)
@@ -174,12 +42,15 @@ void frequencies_count_and_sort(const uint8_t* input, size_t input_size, frequen
         freq->count[input[i]]++;
     }
 
-    // Sort frequencies in increasing order.
+    // Sort frequencies in ascending order.
     for (size_t i = 0; i < ALPHABET_SIZE; ++i)
     {
         for (size_t j = 0; j < ALPHABET_SIZE - i - 1; ++j)
         {
-            if (freq->count[freq->sorted[j]] > freq->count[freq->sorted[j + 1]])
+            uint32_t f1 = freq->count[freq->sorted[j]];
+            uint32_t f2 = freq->count[freq->sorted[j + 1]];
+            // Sort by frequency and alphabetically. Important for canonical prefix codes.
+            if (f1 > f2 || (f1 == f2 && freq->sorted[j] > freq->sorted[j + 1]))
             {
                 size_t swap = freq->sorted[j + 1];
                 freq->sorted[j + 1] = freq->sorted[j];
@@ -187,128 +58,254 @@ void frequencies_count_and_sort(const uint8_t* input, size_t input_size, frequen
             }
         }
     }
-}
 
-// Build the Huffman tree and return the number of symbols in the alphabet whose frequencies are
-// not 0.
-uint32_t build_huffman_tree(huffman_tree_o* tree, const frequencies_t* freq)
-{
-    uint32_t num_used_symbols = 0;
-
-    // Initialize the leaf nodes. We skip bytes with a frequency of 0 as they won't appear in the
-    // Huffman tree.
     for (size_t i = 0; i < ALPHABET_SIZE; ++i)
     {
-        if (freq->count[freq->sorted[i]] == 0) continue;
-
-        tree->nodes[tree->next_free_node] = (node_t){
-            .byte = (uint8_t)freq->sorted[i],
-            .freq = freq->count[freq->sorted[i]],
-            .left = TREE_EMPTY_NODE,
-            .right = TREE_EMPTY_NODE,
-            .parent = TREE_EMPTY_NODE,
-        };
-        tree->leaves_queue.data[tree->leaves_queue.size] = tree->next_free_node++;
-        tree->leaves_queue.size++;
-        num_used_symbols++;
+        if (freq->count[freq->sorted[i]] != 0)
+        {
+            freq->num_used_symbols = ALPHABET_SIZE - i;
+            break;
+        }
     }
+}
 
-    // @Note @Todo: N nodes in the tree will result in a maximum new nodes of N - 1. Thus we can have a maximum of 256 + 256 - 1 nodes = 511.
+#define NULL_CHAIN_REF UINT16_MAX
+#define FREQ_MAX UINT32_MAX
+#define LIMIT_MAX 32 // Allows for 2^32 symbols which is propably more than anyone would ever need.
 
-    // Build huffman tree from the sorted frequencies in O(n) look here for the algorithm
-    // https://en.wikipedia.org/wiki/Huffman_coding#Compression
-    while (tree->leaves_queue.size + tree->parents_queue.size >= 2)
+typedef struct chain_t
+{
+    uint32_t count;
+    uint16_t tail;
+} chain_t;
+
+typedef struct freelist_t
+{
+    uint32_t capacity;
+    uint32_t size;
+    uint16_t next_free;
+
+} freelist_t;
+
+uint16_t alloc_chain(freelist_t* fl, const chain_t* chains)
+{
+    if (fl->next_free == NULL_CHAIN_REF)
     {
-        uint32_t node1 = select_node_with_smallest_frequency(tree);
-        uint32_t node2 = select_node_with_smallest_frequency(tree);
+        assert(fl->size < fl->capacity && "No more nodes available.");
+        return fl->size++;
+    }
+    uint16_t new = fl->next_free;
+    fl->next_free = (uint16_t)chains[new].count;
+    return new;
+}
 
-        // Internal node.
-        uint32_t new_node = tree->next_free_node++;
-        tree->nodes[new_node] = (node_t){
-            .freq = tree->nodes[node1].freq + tree->nodes[node2].freq,
-            .left = node1,
-            .right = node2,
-            .parent = TREE_EMPTY_NODE,
+void release_chain(freelist_t* fl, chain_t* chains, uint32_t chain_index)
+{
+    assert(chain_index != NULL_CHAIN_REF);
+
+    chains[chain_index].count = fl->next_free;
+    chains[chain_index].tail = NULL_CHAIN_REF;
+    fl->next_free = chain_index;
+}
+
+// Compute optimal length-limited prefix code lengths from an ordered set of frequencies using
+// boudary package-merge algorithm. The frequencies *MUST* be sorted in ascending order.
+// Codes lengths of every symbol are returned in the `code_lengths` parameter which *MUST* be large
+// enough to receive the `n` codes lengths.
+// `limit` is the maximum code length allowed for the symbols.
+void package_merge(const frequencies_t* freq, uint8_t limit, uint32_t* code_lengths)
+{
+    const uint32_t* freqs = &freq->count[0];
+    const uint32_t* sorted = &freq->sorted[0];
+    uint32_t n = freq->num_used_symbols;
+
+    assert(n > 0 && "The list of frequencies is empty.");
+    assert(limit <= LIMIT_MAX && "The code length limit is too big.");
+    assert((1ull << limit) > n && "The code length limit is too small.");
+
+    // @Todo: handle case where n == 1. We could also handle simple case like n == 2.
+
+    assert(n > 1);
+
+    uint32_t min_num_chains = limit * (limit + 1) / 2 + 1;
+    chain_t* chains = malloc(min_num_chains * sizeof(chain_t));
+    freelist_t fl = (freelist_t){
+        .capacity = min_num_chains,
+        .size = 0,
+        .next_free = NULL_CHAIN_REF,
+    };
+
+    uint16_t stack[LIMIT_MAX]; // @Todo: Can be set exactly when in use in Deflate.
+    uint8_t stack_size = 0;
+
+    uint16_t lists[limit];
+    uint32_t weights[limit];
+
+    // Init state.
+    for (uint8_t i = 0; i < limit; ++i)
+    {
+        weights[i] = freqs[sorted[0]] + freqs[sorted[1]];
+
+        uint16_t new = alloc_chain(&fl, &chains[0]);
+        chains[new] = (chain_t){
+            .count = 2,
+            .tail = NULL_CHAIN_REF,
         };
-        tree->nodes[node1].parent = new_node;
-        tree->nodes[node2].parent = new_node;
-
-        tree->parents_queue.data[(tree->parents_queue.head + tree->parents_queue.size) % 256] = new_node;
-        tree->parents_queue.size++;
+        lists[i] = new;
     }
 
-    return num_used_symbols;
+    // Run BoundaryPM.
+    uint8_t current = limit - 1;
+    for (uint32_t i = 2; i < 2 * n - 2;)
+    {
+        uint16_t new = alloc_chain(&fl, &chains[0]);
+        uint16_t to_free = lists[current];
+
+        chain_t current_chain = chains[lists[current]];
+        uint32_t freq = current_chain.count >= n ? FREQ_MAX : freqs[sorted[current_chain.count]];
+        uint32_t s = current == 0 ? 0 : weights[current - 1];
+
+        assert(freq > 0 && "Invalid frequency of 0.");
+
+        if (current == 0 || s > freq)
+        {
+            chains[new] = (chain_t){
+                .count = current_chain.count + 1,
+                .tail = current == 0 ? NULL_CHAIN_REF : chains[lists[current]].tail,
+            };
+            weights[current] += freq;
+        }
+        else
+        {
+            chains[new] = (chain_t){
+                .count = current_chain.count,
+                .tail = lists[current - 1],
+            };
+            weights[current - 1] = 0;
+            weights[current] += s;
+
+            stack[stack_size++] = current - 1;
+            stack[stack_size++] = current - 1;
+        }
+
+        lists[current] = new;
+
+        if (current == limit - 1)
+        {
+            i++;
+        }
+
+        if (current == limit - 1)
+        {
+            uint16_t next = chains[to_free].tail;
+            release_chain(&fl, &chains[0], to_free);
+            to_free = next;
+            current--;
+        }
+        while (to_free != NULL_CHAIN_REF)
+        {
+            bool is_chain_used = false;
+            for (uint8_t l = current + 1; l < limit; ++l)
+            {
+                uint16_t chain_index = lists[l];
+                while (chain_index != to_free && chain_index != NULL_CHAIN_REF)
+                {
+                    chain_index = chains[chain_index].tail;
+                }
+
+                if (chain_index == to_free)
+                {
+                    is_chain_used = true;
+                    break;
+                }
+            }
+
+            // The chain is still tied to some other chain at the start of a list. So at this point,
+            // we have freed everything we could.
+            if (is_chain_used) break;
+
+            uint16_t next = chains[to_free].tail;
+            release_chain(&fl, &chains[0], to_free);
+            to_free = next;
+            current--;
+        }
+
+        if (stack_size != 0)
+        {
+            current = stack[--stack_size];
+        }
+        else
+        {
+            current = limit - 1;
+        }
+    }
+
+    uint8_t code_len = 1;
+    uint16_t chain_index = lists[limit - 1];
+    uint32_t symbol_idx = ALPHABET_SIZE;
+    while (chain_index != NULL_CHAIN_REF)
+    {
+        uint16_t next = chains[chain_index].tail;
+        uint16_t num_symbols_with_len = next == NULL_CHAIN_REF
+            ? chains[chain_index].count
+            : chains[chain_index].count - chains[next].count;
+        for (uint16_t j = 0; j < num_symbols_with_len; ++j)
+        {
+            while (freqs[sorted[symbol_idx]] == 0)
+            {
+                code_lengths[sorted[--symbol_idx]] = 0;
+            }
+
+            code_lengths[sorted[--symbol_idx]] = code_len;
+        }
+
+        assert(symbol_idx <= n && "It tried to add more code lengths than there are symbols.");
+
+        chain_index = next;
+        code_len++;
+    }
+
+    free(chains);
 }
 
 // Constructs a canonical Huffman tree.
 //
-// A canonical Huffman tree is one Huffman tree amongst the several tree possibilities of a given alphabet.
-// This tree fits additional rules making it very easy to describe in a compact format.
-//
-uint32_t build_canonical_huffman_tree(huffman_tree_o* tree, const frequencies_t* freq)
+// A canonical Huffman tree is one Huffman tree amongst the several tree possibilities of a given
+// alphabet. This tree fits additional rules making it very easy to describe in a compact format.
+// https://en.wikipedia.org/wiki/Canonical_Huffman_code
+void build_canonical_prefix_code(const uint32_t* lengths, const uint32_t* sorted, uint32_t num_used_symbols, codeword_t* codewords)
 {
-    // @Todo: impl.
-    // @Todo: limit length codes to length L (Deflate uses 15).
-}
-
-void build_codewords(const huffman_tree_o* tree, codeword_t* codewords, uint32_t num_used_symbols)
-{
-    // We know that the first N nodes in `nodes` are the leaves of the tree. Thus, we can iterate
-    // only over these.
-    for (int i = 0; i < num_used_symbols; ++i)
+    uint32_t code = 0;
+    for (int i = ALPHABET_SIZE - 1; i >= 0; --i)
     {
-        uint32_t current = i;
-        uint32_t bits = 0;
-        uint8_t num_bits = 0;
-        uint8_t byte = tree->nodes[current].byte;
+        uint32_t length = lengths[sorted[i]];
+        uint32_t next_length = i == 0 ? length : lengths[i - 1];
 
-        while (tree->nodes[current].parent != TREE_EMPTY_NODE)
-        {
-            uint32_t parent = tree->nodes[current].parent;
-            if (tree->nodes[parent].left == current)
-            {
-                // Add a 0 (codewords are already initialized to 0).
-                num_bits++;
-            }
-            else
-            {
-                // Add a 1.
-                bits |= (1 << num_bits);
-                num_bits++;
-            }
-
-            current = parent;
-        }
-
-        codewords[byte].bits = bits;
-        codewords[byte].num_bits = num_bits;
+        codewords[sorted[i]].num_bits = length;
+        codewords[sorted[i]].bits = code;
+        code = (code + 1) << (next_length - length);
     }
 }
 
 uint8_t* huffman_compress(const uint8_t* input, size_t size)
 {
-    bitarray_t output = {0};
-
     frequencies_t freq;
     frequencies_init(&freq);
     frequencies_count_and_sort(input, size, &freq);
 
-
-    huffman_tree_o tree;
-    huffman_tree_init(&tree);
-    uint32_t num_used_symbols = build_huffman_tree(&tree, &freq);
-
-#ifndef NDEBUG
-    // The resulting node is always in the second queue. @Todo: unless there is only one node in queue1 at first.
-    uint32_t root = tree.parents_queue.data[tree.parents_queue.head];
-    write_graph(&tree, root); // @Cleanup: remove, or keep for debug only.
-#endif
+    uint32_t lengths[ALPHABET_SIZE];
+    // @Todo: the algorithm in the other file cannot be used directly here because of what it
+    // outputs. Because it directly returns code lengths it needs to be aware of the total size of
+    // the alphabet and not only the number non-zero frequencies.I don't really want to pass in this
+    // parameter. I think we should change its output to return the array of active leaves as
+    // presented in the paper and handle the actual code length creation in here.
+    package_merge(&freq, 32, &lengths[0]);
 
     codeword_t codewords[ALPHABET_SIZE];
-    build_codewords(&tree, &codewords[0], num_used_symbols);
+    build_canonical_prefix_code(&lengths[0], &freq.sorted[0], freq.num_used_symbols, &codewords[0]);
 
     // @Cleanup: for debug purposes only. Remove when done.
-    // for (int i = 0; i < num_used_symbols; ++i)
+    // for (int i = 0; i < freq.num_used_symbols; ++i)
     // {
         // printf("0x%x %d\n", i, codewords[i].num_bits);
     // }
@@ -316,7 +313,7 @@ uint8_t* huffman_compress(const uint8_t* input, size_t size)
     // @Todo: We need to encode the huffman tree in the output as well if we ever want to decode
     // the data.
 
-    // @Note @Todo: pass over the input and compress using the codewords. As simple as that :)
+    bitarray_t output = {0};
     const uint8_t* it = input;
     const uint8_t* end = input + size;
     while (it != end)
@@ -336,3 +333,4 @@ uint8_t* huffman_uncompress(const uint8_t* compressed_data, size_t size)
     // @Todo: impl.
     return NULL;
 }
+
