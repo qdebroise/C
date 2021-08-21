@@ -113,12 +113,8 @@ void release_chain(freelist_t* fl, chain_t* chains, uint32_t chain_index)
 // Codes lengths of every symbol are returned in the `code_lengths` parameter which *MUST* be large
 // enough to receive the `n` codes lengths.
 // `limit` is the maximum code length allowed for the symbols.
-void package_merge(const frequencies_t* freq, uint8_t limit, uint32_t* code_lengths)
+void package_merge(const uint32_t* freqs, const uint32_t* sorted, uint32_t n, uint8_t limit, uint32_t* active_leaves)
 {
-    const uint32_t* freqs = &freq->count[0];
-    const uint32_t* sorted = &freq->sorted[0];
-    uint32_t n = freq->num_used_symbols;
-
     assert(n > 0 && "The list of frequencies is empty.");
     assert(limit <= LIMIT_MAX && "The code length limit is too big.");
     assert((1ull << limit) > n && "The code length limit is too small.");
@@ -142,6 +138,7 @@ void package_merge(const frequencies_t* freq, uint8_t limit, uint32_t* code_leng
     uint32_t weights[limit];
 
     // Init state.
+    assert(freqs[sorted[0]] > 0 && freqs[sorted[1]] > 0 && "Frequencies of 0 are not allowed.");
     for (uint8_t i = 0; i < limit; ++i)
     {
         weights[i] = freqs[sorted[0]] + freqs[sorted[1]];
@@ -165,7 +162,7 @@ void package_merge(const frequencies_t* freq, uint8_t limit, uint32_t* code_leng
         uint32_t freq = current_chain.count >= n ? FREQ_MAX : freqs[sorted[current_chain.count]];
         uint32_t s = current == 0 ? 0 : weights[current - 1];
 
-        assert(freq > 0 && "Invalid frequency of 0.");
+        assert(freq > 0 && "Frequencies of 0 are not allowed.");
 
         if (current == 0 || s > freq)
         {
@@ -240,29 +237,13 @@ void package_merge(const frequencies_t* freq, uint8_t limit, uint32_t* code_leng
         }
     }
 
-    uint8_t code_len = 1;
     uint16_t chain_index = lists[limit - 1];
-    uint32_t symbol_idx = ALPHABET_SIZE;
+    uint8_t l = limit - 1;
     while (chain_index != NULL_CHAIN_REF)
     {
-        uint16_t next = chains[chain_index].tail;
-        uint16_t num_symbols_with_len = next == NULL_CHAIN_REF
-            ? chains[chain_index].count
-            : chains[chain_index].count - chains[next].count;
-        for (uint16_t j = 0; j < num_symbols_with_len; ++j)
-        {
-            while (freqs[sorted[symbol_idx]] == 0)
-            {
-                code_lengths[sorted[--symbol_idx]] = 0;
-            }
-
-            code_lengths[sorted[--symbol_idx]] = code_len;
-        }
-
-        assert(symbol_idx <= n && "It tried to add more code lengths than there are symbols.");
-
-        chain_index = next;
-        code_len++;
+        assert(l < limit && "It tried to add more active leaves than there are lists.");
+        active_leaves[l--] = chains[chain_index].count;
+        chain_index = chains[chain_index].tail;
     }
 
     free(chains);
@@ -287,19 +268,40 @@ void build_canonical_prefix_code(const uint32_t* lengths, const uint32_t* sorted
     }
 }
 
+void package_merge_generate_lengths(const uint32_t* active_leaves, const uint32_t* sorted, uint8_t limit, uint32_t used_symbols, uint32_t alphabet_size, uint32_t* code_lengths)
+{
+    uint8_t code_len = limit;
+    uint32_t symbol_index = alphabet_size - used_symbols;
+    for (uint8_t i = 0; i < limit; ++i)
+    {
+        uint32_t num_symbols_with_len = i == 0
+            ? active_leaves[i]
+            : active_leaves[i] - active_leaves[i - 1];
+        for (uint32_t j = 0; j < num_symbols_with_len; ++j)
+        {
+            code_lengths[sorted[symbol_index++]] = code_len;
+        }
+        assert(symbol_index <= alphabet_size && "It tried to add more code lengths than there are symbols.");
+        code_len--;
+    }
+}
+
 uint8_t* huffman_compress(const uint8_t* input, size_t size)
 {
     frequencies_t freq;
     frequencies_init(&freq);
     frequencies_count_and_sort(input, size, &freq);
 
-    uint32_t lengths[ALPHABET_SIZE];
     // @Todo: the algorithm in the other file cannot be used directly here because of what it
     // outputs. Because it directly returns code lengths it needs to be aware of the total size of
     // the alphabet and not only the number non-zero frequencies.I don't really want to pass in this
     // parameter. I think we should change its output to return the array of active leaves as
     // presented in the paper and handle the actual code length creation in here.
-    package_merge(&freq, 32, &lengths[0]);
+    // @Note: feed package-merge only the frequencies that are non-zero.
+    uint32_t active_leaves[32] = {0};
+    package_merge(&freq.count[0], &freq.sorted[ALPHABET_SIZE - freq.num_used_symbols], freq.num_used_symbols, 32, &active_leaves[0]);
+    uint32_t lengths[ALPHABET_SIZE] = {0};
+    package_merge_generate_lengths(&active_leaves[0], &freq.sorted[0], 32, freq.num_used_symbols, ALPHABET_SIZE, &lengths[0]);
 
     codeword_t codewords[ALPHABET_SIZE];
     build_canonical_prefix_code(&lengths[0], &freq.sorted[0], freq.num_used_symbols, &codewords[0]);

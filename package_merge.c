@@ -123,6 +123,7 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
 
     // The algorithm starts with the two lookahead chains in each list, that is: weights `freqs[0]`
     // and `freqs[1]`.
+    assert(freqs[sorted[0]] > 0 && freqs[sorted[1]] > 0 && "Frequencies of 0 are not allowed.");
     for (uint8_t i = 0; i < limit; ++i)
     {
         weights[i] = freqs[0] + freqs[1];
@@ -148,7 +149,7 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* c
         uint32_t freq = current_chain.count >= n ? FREQ_MAX : freqs[current_chain.count];
         uint32_t s = current == 0 ? 0 : weights[current - 1];
 
-        assert(freq > 0 && "Invalid frequency of 0.");
+        assert(freq > 0 && "Frequencies of 0 are not allowed.");
 
         if (current == 0 || s > freq)
         {
