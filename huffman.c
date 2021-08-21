@@ -37,7 +37,7 @@ void frequencies_init(frequencies_t* freq)
     }
 }
 
-// @Todo @Performance; we use the indirection quite a lot like lengths[sorted[i]], freqs[sorted[i]],
+// @Todo @Performance: we use the indirection quite a lot like lengths[sorted[i]], freqs[sorted[i]],
 // etc. This cause quite a lot of jumps all over the place in memory. Alphabets are rather small,
 // for my use case anyway so copying the frequencies in a sorted array should be rather cheap and
 // faster to use afterwards. Then we only need use the indirection when building codelengths for
@@ -93,7 +93,7 @@ void build_canonical_prefix_code(const uint32_t* lengths, const uint32_t* sorted
     uint32_t code = 0;
     for (int i = ALPHABET_SIZE - 1; i >= 0; --i)
     {
-        uint32_t length = lengths[sorted[i]];
+        uint32_t length = lengths[i];
         uint32_t next_length = i == 0 ? length : lengths[i - 1]; // @Todo: add one more element to avoid the overflow condition ?
 
         codewords[sorted[i]].num_bits = length;
@@ -102,13 +102,17 @@ void build_canonical_prefix_code(const uint32_t* lengths, const uint32_t* sorted
     }
 }
 
-// @Todo: can't be lengths generated in the same order as the sorted frequencies ? Thus removing the
-// indirection code_lengths[sorted_indices[i]]. Then everything is put back in order when building
-// the actual prefix canonical code.
-void package_merge_generate_lengths(const uint32_t* active_leaves, const uint32_t* sorted, uint8_t limit, uint32_t used_symbols, uint32_t alphabet_size, uint32_t* code_lengths)
+void package_merge_generate_lengths(const uint32_t* active_leaves, uint8_t limit, uint32_t used_symbols, uint32_t alphabet_size, uint32_t* code_lengths)
 {
     uint8_t code_len = limit;
-    uint32_t symbol_index = alphabet_size - used_symbols;
+    uint32_t symbol_index = 0;
+
+    // First fill the symbols with a frequency of 0 with a code length of 0.
+    for (uint32_t i = 0; i < alphabet_size - used_symbols; ++i)
+    {
+        code_lengths[symbol_index++] = 0;
+    }
+
     for (uint8_t i = 0; i < limit; ++i)
     {
         uint32_t num_symbols_with_len = i == 0
@@ -116,11 +120,12 @@ void package_merge_generate_lengths(const uint32_t* active_leaves, const uint32_
             : active_leaves[i] - active_leaves[i - 1];
         for (uint32_t j = 0; j < num_symbols_with_len; ++j)
         {
-            code_lengths[sorted[symbol_index++]] = code_len;
+            code_lengths[symbol_index++] = code_len;
         }
         assert(symbol_index <= alphabet_size && "It tried to add more code lengths than there are symbols.");
         code_len--;
     }
+    while (symbol_index < alphabet_size) code_lengths[symbol_index--] = 0;
 }
 
 uint8_t* huffman_compress(const uint8_t* input, size_t size)
@@ -129,16 +134,11 @@ uint8_t* huffman_compress(const uint8_t* input, size_t size)
     frequencies_init(&freq);
     frequencies_count_and_sort(input, size, &freq);
 
-    // @Todo: the algorithm in the other file cannot be used directly here because of what it
-    // outputs. Because it directly returns code lengths it needs to be aware of the total size of
-    // the alphabet and not only the number non-zero frequencies.I don't really want to pass in this
-    // parameter. I think we should change its output to return the array of active leaves as
-    // presented in the paper and handle the actual code length creation in here.
     // @Note: feed package-merge only the frequencies that are non-zero.
     uint32_t active_leaves[MAX_CODE_LENGTH] = {0};
     package_merge(&freq.sorted[ALPHABET_SIZE - freq.num_used_symbols], freq.num_used_symbols, MAX_CODE_LENGTH, &active_leaves[0]);
     uint32_t lengths[ALPHABET_SIZE] = {0};
-    package_merge_generate_lengths(&active_leaves[0], &freq.sorted_indices[0], MAX_CODE_LENGTH, freq.num_used_symbols, ALPHABET_SIZE, &lengths[0]);
+    package_merge_generate_lengths(&active_leaves[0], MAX_CODE_LENGTH, freq.num_used_symbols, ALPHABET_SIZE, &lengths[0]);
 
     codeword_t codewords[ALPHABET_SIZE];
     build_canonical_prefix_code(&lengths[0], &freq.sorted_indices[0], &codewords[0]);
@@ -169,6 +169,13 @@ uint8_t* huffman_compress(const uint8_t* input, size_t size)
 
 uint8_t* huffman_uncompress(const uint8_t* compressed_data, size_t size)
 {
+    // @Note: next steps are
+    //  - check/test that the code built are indeed canonical prefix codes.
+    //  - write the code lengths of the canonical prefix code to the output.
+    //  - decoding: read the code lengths and rebuild the prefix code.
+    //  - decoding: decode the stream
+    //  - lookup fast decoders and LUT ideas for fast decoding.
+    //
     // @Todo: impl.
     return NULL;
 }

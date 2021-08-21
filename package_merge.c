@@ -252,6 +252,8 @@ void package_merge(const uint32_t* freqs, uint32_t n, uint8_t limit, uint32_t* a
         active_leaves[l--] = chains[chain_index].count;
         chain_index = chains[chain_index].tail;
     }
+    // Fill the rest with zeros.
+    while (l < limit) active_leaves[l--] = 0;
 
     free(chains);
 }

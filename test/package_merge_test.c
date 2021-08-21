@@ -5,6 +5,30 @@
 #include <stdio.h>
 #include <time.h>
 
+void get_lengths(const uint32_t* active_leaves, uint8_t limit, uint32_t used_symbols, uint32_t alphabet_size, uint32_t* code_lengths)
+{
+    uint8_t code_len = limit;
+    uint32_t symbol_index = 0;
+
+    for (uint32_t i = 0; i < alphabet_size - used_symbols; ++i)
+    {
+        code_lengths[symbol_index++] = 0;
+    }
+
+    for (uint8_t i = 0; i < limit; ++i)
+    {
+        uint32_t num_symbols_with_len = i == 0
+            ? active_leaves[i]
+            : active_leaves[i] - active_leaves[i - 1];
+        for (uint32_t j = 0; j < num_symbols_with_len; ++j)
+        {
+            code_lengths[symbol_index++] = code_len;
+        }
+        assert(symbol_index <= alphabet_size && "It tried to add more code lengths than there are symbols.");
+        code_len--;
+    }
+}
+
 void print_array(const uint32_t* arr, size_t n)
 {
     printf("[");
@@ -12,7 +36,7 @@ void print_array(const uint32_t* arr, size_t n)
     printf("]\n");
 }
 
-bool check_results(const uint32_t* results, const uint32_t* expected, size_t n)
+bool compare_arrays(const uint32_t* results, const uint32_t* expected, size_t n)
 {
     for (size_t i = 0; i < n; ++i)
     {
@@ -29,26 +53,111 @@ bool check_results(const uint32_t* results, const uint32_t* expected, size_t n)
     return true;
 }
 
-int main(int argc, char* argv[])
+void test_leaves_paper_example_limit_3()
 {
-    //@Todo: update the tests.
-
     uint32_t frequencies[] = {1, 1, 5, 7, 10, 14};
     uint32_t n = sizeof(frequencies) / sizeof(frequencies[0]);
+    uint32_t limit = 3;
+    uint32_t active_leaves[limit];
+
+    package_merge(&frequencies[0], n, limit, &active_leaves[0]);
+    assert(compare_arrays(active_leaves, (uint32_t[]){4, 6, 6}, limit));
+}
+
+void test_leaves_paper_example_limit_4()
+{
+    uint32_t frequencies[] = {1, 1, 5, 7, 10, 14};
+    uint32_t n = sizeof(frequencies) / sizeof(frequencies[0]);
+    uint32_t limit = 4;
+    uint32_t active_leaves[limit];
+
+    package_merge(&frequencies[0], n, limit, &active_leaves[0]);
+    assert(compare_arrays(active_leaves, (uint32_t[]){2, 3, 6, 6}, limit));
+}
+
+void test_leaves_paper_example_limit_7()
+{
+    uint32_t frequencies[] = {1, 1, 5, 7, 10, 14};
+    uint32_t n = sizeof(frequencies) / sizeof(frequencies[0]);
+    uint32_t limit = 7;
+    uint32_t active_leaves[limit];
+
+    package_merge(&frequencies[0], n, limit, &active_leaves[0]);
+    assert(compare_arrays(active_leaves, (uint32_t[]){0, 0, 2, 3, 4, 5, 6}, limit));
+}
+
+void test_leaves_paper_example_zero_freqs()
+{
+    uint32_t frequencies[] = {0, 0, 0, 0, 0, 1, 1, 5, 7, 10, 14};
+    uint32_t limit = 4;
+    uint32_t active_leaves[limit];
+
+    package_merge(&frequencies[5], 6, limit, &active_leaves[0]);
+    assert(compare_arrays(active_leaves, (uint32_t[]){2, 3, 6, 6}, limit));
+}
+
+void test_length_paper_example_limit_3()
+{
+    uint32_t frequencies[] = {1, 1, 5, 7, 10, 14};
+    uint32_t n = sizeof(frequencies) / sizeof(frequencies[0]);
+    uint32_t limit = 3;
+    uint32_t active_leaves[limit];
     uint32_t code_length[n];
 
-    uint32_t expected_length_3[] = {3, 3, 3, 3, 2, 2};
-    uint32_t expected_length_4[] = {4, 4, 3, 2, 2, 2};
-    uint32_t expected_length_5[] = {5, 5, 4, 3, 2, 1};
-    uint32_t expected_length_7[] = {5, 5, 4, 3, 2, 1};
-    uint32_t expected_length_15[] = {5, 5, 4, 3, 2, 1};
+    package_merge(&frequencies[0], n, limit, &active_leaves[0]);
+    get_lengths(&active_leaves[0], limit, n, n, &code_length[0]);
+    assert(compare_arrays(code_length, (uint32_t[]){3, 3, 3, 3, 2, 2}, n));
+}
 
-    package_merge(&frequencies[0], n, 3, &code_length[0]); assert(check_results(code_length, expected_length_3, n));
-    package_merge(&frequencies[0], n, 4, &code_length[0]); assert(check_results(code_length, expected_length_4, n));
-    package_merge(&frequencies[0], n, 5, &code_length[0]); assert(check_results(code_length, expected_length_5, n));
-    package_merge(&frequencies[0], n, 7, &code_length[0]); assert(check_results(code_length, expected_length_7, n));
-    package_merge(&frequencies[0], n, 15, &code_length[0]); assert(check_results(code_length, expected_length_15, n));
-    package_merge(&frequencies[0], n, 32, &code_length[0]);
+void test_length_paper_example_limit_4()
+{
+    uint32_t frequencies[] = {1, 1, 5, 7, 10, 14};
+    uint32_t n = sizeof(frequencies) / sizeof(frequencies[0]);
+    uint32_t limit = 4;
+    uint32_t active_leaves[limit];
+    uint32_t code_length[n];
+
+    package_merge(&frequencies[0], n, limit, &active_leaves[0]);
+    get_lengths(&active_leaves[0], limit, n, n, &code_length[0]);
+    assert(compare_arrays(code_length, (uint32_t[]){4, 4, 3, 2, 2, 2}, n));
+}
+
+void test_length_paper_example_limit_7()
+{
+    uint32_t frequencies[] = {1, 1, 5, 7, 10, 14};
+    uint32_t n = sizeof(frequencies) / sizeof(frequencies[0]);
+    uint32_t limit = 7;
+    uint32_t active_leaves[limit];
+    uint32_t code_length[n];
+
+    package_merge(&frequencies[0], n, limit, &active_leaves[0]);
+    get_lengths(&active_leaves[0], limit, n, n, &code_length[0]);
+    assert(compare_arrays(code_length, (uint32_t[]){5, 5, 4, 3, 2, 1}, n));
+}
+
+void test_length_paper_example_zero_freqs()
+{
+    uint32_t frequencies[] = {0, 0, 0, 0, 0, 1, 1, 5, 7, 10, 14};
+    uint32_t n = sizeof(frequencies) / sizeof(frequencies[0]);
+    uint32_t limit = 4;
+    uint32_t active_leaves[limit];
+    uint32_t code_length[n];
+
+    package_merge(&frequencies[5], 6, limit, &active_leaves[0]);
+    get_lengths(&active_leaves[0], limit, 6, n, &code_length[0]);
+    assert(compare_arrays(code_length, (uint32_t[]){0, 0, 0, 0, 0, 4, 4, 3, 2, 2, 2}, n));
+}
+
+int main(int argc, char* argv[])
+{
+    test_leaves_paper_example_limit_3();
+    test_leaves_paper_example_limit_4();
+    test_leaves_paper_example_limit_7();
+    test_leaves_paper_example_zero_freqs();
+    test_length_paper_example_limit_3();
+    test_length_paper_example_limit_4();
+    test_length_paper_example_limit_7();
+    test_length_paper_example_zero_freqs();
 
     // Fibonnaci sequence, 42 terms, worst case scenario for building Huffman tree.
     uint32_t frequencies2[] = {1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, 6765, 10946, 17711, 28657, 46368, 75025, 121393, 196418, 317811, 514229, 832040, 1346269, 2178309, 3524578, 5702887, 9227465, 14930352, 24157817, 39088169, 63245986, 102334155, 165580141, 267914296};
