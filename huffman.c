@@ -12,7 +12,7 @@
 
 // @Todo: put this elsewhere. See when all this will be used in Deflate. Does Deflate always uses 15
 // as the max code length in all its trees ?
-#define MAX_CODE_LENGTH 32
+#define MAX_CODE_LENGTH 31 // 31 so that it can fit on 6 bits.
 
 typedef struct frequencies_t
 {
@@ -149,10 +149,25 @@ uint8_t* huffman_compress(const uint8_t* input, size_t size)
         // printf("0x%x %d\n", i, codewords[i].num_bits);
     // }
 
-    // @Todo: We need to encode the huffman tree in the output as well if we ever want to decode
-    // the data.
+    // @Cleanup: debug only for checking prefix code reconstruction.
+    /*
+    for (int i = 0; i < ALPHABET_SIZE; ++i)
+    {
+        if (codewords[i].num_bits != 0)
+            printf("0x%x %d %x\n", i, codewords[i].num_bits, codewords[i].bits);
+    }
+    */
 
     bitarray_t output = {0};
+
+    // Send the code lengths to the ouput to be able to rebuild the prefix code when decompressing.
+    for (uint32_t i = 0; i < ALPHABET_SIZE; ++i)
+    {
+        // Code lengths are from 0-32 as of now. So we only need 6 bits to encode one length.
+        assert(codewords[i].num_bits <= MAX_CODE_LENGTH);
+        bitarray_push_bits_msb(&output, codewords[i].num_bits, 6);
+    }
+
     const uint8_t* it = input;
     const uint8_t* end = input + size;
     while (it != end)
@@ -169,14 +184,119 @@ uint8_t* huffman_compress(const uint8_t* input, size_t size)
 
 uint8_t* huffman_uncompress(const uint8_t* compressed_data, size_t size)
 {
-    // @Note: next steps are
-    //  - check/test that the code built are indeed canonical prefix codes.
-    //  - write the code lengths of the canonical prefix code to the output.
-    //  - decoding: read the code lengths and rebuild the prefix code.
-    //  - decoding: decode the stream
+    // @Todo:
+    //  - check/test that the codes built are indeed canonical prefix codes.
     //  - lookup fast decoders and LUT ideas for fast decoding.
-    //
-    // @Todo: impl.
-    return NULL;
+    // @Note: Huffman compression output has its last byte padded. Thus, when decompression it
+    // is likely that few extra bytes, not originally present in the stream, are added (Max 7 more
+    // if decoding 7 times a symbol with a code length 1). This won't be an issue when putting all
+    // this together for Delfate.
+
+    assert(size * 8 >= 256 * 6 && "Compressed data doesn't have a prefix code.");
+
+    bitarray_t input = {
+        .size = size * 8,
+        .data = (uint8_t*)compressed_data,
+    };
+
+    codeword_t codewords[ALPHABET_SIZE];
+    uint32_t bits_read = 0;
+    for (uint32_t i = 0; i < ALPHABET_SIZE; ++i)
+    {
+        codewords[i].num_bits = bitarray_bits_msb(&input, bits_read, 6);
+        bits_read += 6;
+    }
+
+    // Sort by length.
+    uint32_t sorted[ALPHABET_SIZE];
+    for (uint32_t i = 0; i < ALPHABET_SIZE; ++i)
+    {
+        sorted[i] = i;
+    }
+
+    for (size_t i = 0; i < ALPHABET_SIZE; ++i)
+    {
+        for (size_t j = 0; j < ALPHABET_SIZE - i - 1; ++j)
+        {
+            uint32_t f1 = codewords[sorted[j]].num_bits;
+            uint32_t f2 = codewords[sorted[j + 1]].num_bits;
+            // Sort by frequency and alphabetically. Important for canonical prefix codes.
+            if (f1 < f2 || (f1 == f2 && sorted[j] > sorted[j + 1]))
+            {
+                size_t swap = sorted[j + 1];
+                sorted[j + 1] = sorted[j];
+                sorted[j] = swap;
+            }
+        }
+    }
+
+    // Rebuild prefix code.
+    uint32_t code = 0;
+    for (int i = ALPHABET_SIZE - 1; i >= 0; --i)
+    {
+        if (codewords[sorted[i]].num_bits == 0) continue;
+
+        uint32_t length = codewords[sorted[i]].num_bits;
+        // @Todo: add one more element to avoid the overflow condition ?
+        uint32_t next_length = i == 0 ? length : codewords[sorted[i - 1]].num_bits;
+
+        // codewords[sorted[i]].bits = code;
+        codewords[sorted[i]].bits = code;
+        code = (code + 1) << (next_length - length);
+    }
+
+    // @Cleanup: debug only for checking prefix code reconstruction.
+    /*
+    for (int i = 0; i < ALPHABET_SIZE; ++i)
+    {
+        if (codewords[i].num_bits != 0)
+            printf("0x%x %d %x\n", i, codewords[i].num_bits, codewords[i].bits);
+    }
+    */
+
+    // Bruteforce decompression to quicky test things out O(N*M). N=bits_count, M=ALPHABET_SIZE.
+    // @Todo: change! This is dirty and really slow but proves that decoding works fine.
+    uint8_t* output = NULL; // Array.
+    uint32_t bit = 0;
+    uint32_t len = 0;
+    uint8_t tmp[ALPHABET_SIZE]; memset(tmp, 1, sizeof(tmp));
+    while (bits_read < size * 8)
+    {
+        bit = bitarray_bit(&input, bits_read);
+        bits_read++;
+        len++;
+
+        uint32_t count = 0;
+        uint32_t idx = 0;
+        for (uint32_t i = 0; i < ALPHABET_SIZE; ++i)
+        {
+            if (tmp[i] == 0) continue;
+
+            if (codewords[i].num_bits == 0)
+            {
+                tmp[i] = 0;
+                continue;
+            }
+
+            if (bit == ((codewords[i].bits >> (codewords[i].num_bits - len)) & 0x1))
+            {
+                count++;
+                idx = i;
+            }
+            else
+            {
+                tmp[i] = 0;
+            }
+        }
+
+        if (count == 1)
+        {
+            array_push(output, (uint8_t)idx);
+            len = 0;
+            memset(tmp, 1, sizeof(tmp));
+        }
+    }
+
+    return output;
 }
 

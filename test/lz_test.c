@@ -43,9 +43,16 @@ int main(int argc, char* argv[])
     toc = clock();
     float huffman_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
 
+    printf("Start Huffman decompression\n");
+    tic = clock();
+    uint8_t* uncompressed_huffman = huffman_uncompress(huffman_output, array_size(huffman_output));
+    toc = clock();
+    float huffman_uncompress_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
+
     printf("Start LZ decompression\n");
     tic = clock();
     uint8_t* uncompressed_data = lz_uncompress(compressed_data, array_size(compressed_data));
+    // uint8_t* uncompressed_data = lz_uncompress(uncompressed_huffman, array_size(compressed_data));
     toc = clock();
     float uncompression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;
 
@@ -54,16 +61,38 @@ int main(int argc, char* argv[])
             (float)array_size(compressed_data) / (1 << 20),
             (1 - array_size(compressed_data) / (float)array_size(uncompressed_data)) * 100,
             compression_time_s, uncompression_time_s);
-    printf("Huffman:\n\tInput size (Mb): %f\n\tOutput size (Mb): %f\n\tCompression rate (%%): %.3f\n\tHuffman time (s): %.3f\n",
+    printf("Huffman:\n\tInput size (Mb): %f\n\tOutput size (Mb): %f\n\tCompression rate (%%): %.3f\n\tHuffman time (s): %.3f\n\tUncompression time (s): %f\n",
             (float)array_size(compressed_data) / (1 << 20),
             (float)array_size(huffman_output) / (1 << 20),
             (1 - array_size(huffman_output) / (float)array_size(compressed_data)) * 100,
-            huffman_time_s);
+            huffman_time_s, huffman_uncompress_time_s);
     printf("Total (LZ + Huffman):\n\tInput size (Mb): %f\n\tOutput size (Mb): %f\n\tCompression rate (%%): %.3f\n\tCompression time (s): %.3f\n",
             (float)array_size(uncompressed_data) / (1 << 20),
             (float)array_size(huffman_output) / (1 << 20),
             (1 - array_size(huffman_output) / (float)array_size(uncompressed_data)) * 100,
             compression_time_s + huffman_time_s);
+
+    /*
+    printf("%s\n", uncompressed_data);
+    printf("LZ output:\n");
+    for (size_t i = 0; i < array_size(compressed_data); ++i)
+    {
+        printf("%x ", compressed_data[i]);
+    }
+    printf("\n");
+    printf("Huffman uncompressed output:\n");
+    for (size_t i = 0; i < array_size(uncompressed_huffman); ++i)
+    {
+        printf("%x ", uncompressed_huffman[i]);
+    }
+    printf("\n\n");
+    */
+
+    printf("LZ output size: %lu B\n", array_size(compressed_data));
+    printf("Huffman output size: %lu B\n", array_size(huffman_output));
+    printf("Uncompressed huffman size: %lu B\n", array_size(uncompressed_huffman));
+    printf("Uncompressed LZ size: %lu B\n", array_size(uncompressed_data));
+    printf("Original size: %lu B\n", end);
     /*
     printf("LZ compressed data stream:\n");
     for (size_t i = 0; i < array_size(compressed_data); ++i)
@@ -85,6 +114,7 @@ int main(int argc, char* argv[])
     array_free(compressed_data);
     array_free(uncompressed_data);
     array_free(huffman_output);
+    array_free(uncompressed_huffman);
     free(content);
 
     return 0;
