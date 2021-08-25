@@ -13,6 +13,8 @@ int main(int argc, char* argv[])
     // static const char content[] = "abcabcabcabc";
     // static const char content[] = "abracadabra";
     // static const char content[] = "les chaussettes de l'archiduchesse sont elles seches archiseches.";
+    // static const char content[] = "les chaussettes duchesse";
+    // static const char content[] = "bbba";
     // static const char content[] = "aacaacabcabaaac";
     // static const size_t end = sizeof(content) / sizeof(content[0]);
 
@@ -52,6 +54,10 @@ int main(int argc, char* argv[])
     printf("Start LZ decompression\n");
     tic = clock();
     uint8_t* uncompressed_data = lz_uncompress(compressed_data, array_size(compressed_data));
+    // @Note: we can't directly fedd the output of huffman uncompression because the huffman decoder
+    // decodes a bit more bytes that in the original data. This is due to a lack of knowledge on
+    // when to stop decoding. This is no big deal for now as all this will be fixed when things will
+    // be put together for Deflate.
     // uint8_t* uncompressed_data = lz_uncompress(uncompressed_huffman, array_size(compressed_data));
     toc = clock();
     float uncompression_time_s = (float)(toc - tic) / CLOCKS_PER_SEC;

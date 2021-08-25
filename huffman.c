@@ -59,7 +59,7 @@ void frequencies_count_and_sort(const uint8_t* input, size_t input_size, frequen
             uint32_t f1 = freq->count[freq->sorted_indices[j]];
             uint32_t f2 = freq->count[freq->sorted_indices[j + 1]];
             // Sort by frequency and alphabetically. Important for canonical prefix codes.
-            if (f1 > f2 || (f1 == f2 && freq->sorted_indices[j] > freq->sorted_indices[j + 1]))
+            if (f1 > f2 || (f1 == f2 && freq->sorted_indices[j] < freq->sorted_indices[j + 1]))
             {
                 size_t swap = freq->sorted_indices[j + 1];
                 freq->sorted_indices[j + 1] = freq->sorted_indices[j];
@@ -83,49 +83,83 @@ void frequencies_count_and_sort(const uint8_t* input, size_t input_size, frequen
     }
 }
 
-// Constructs a canonical Huffman tree.
-//
-// A canonical Huffman tree is one Huffman tree amongst the several tree possibilities of a given
-// alphabet. This tree fits additional rules making it very easy to describe in a compact format.
-// https://en.wikipedia.org/wiki/Canonical_Huffman_code
-void build_canonical_prefix_code(const uint32_t* lengths, const uint32_t* sorted, codeword_t* codewords)
-{
-    uint32_t code = 0;
-    for (int i = ALPHABET_SIZE - 1; i >= 0; --i)
-    {
-        uint32_t length = lengths[i];
-        uint32_t next_length = i == 0 ? length : lengths[i - 1]; // @Todo: add one more element to avoid the overflow condition ?
-
-        codewords[sorted[i]].num_bits = length;
-        codewords[sorted[i]].bits = code;
-        code = (code + 1) << (next_length - length);
-    }
-}
-
-void package_merge_generate_lengths(const uint32_t* active_leaves, uint8_t limit, uint32_t used_symbols, uint32_t alphabet_size, uint32_t* code_lengths)
+// Takes the output of package-merge and transforms it to an array compatible with the prefix-code
+// generation algorithm. Basically, we convert the number of active leaves to a number of symbols.
+// The ouput array `l` contains the number of symbols used indexed by the code length.
+void count_symbols_with_length(const uint32_t* active_leaves, uint32_t* l, uint8_t limit)
 {
     uint8_t code_len = limit;
-    uint32_t symbol_index = 0;
-
-    // First fill the symbols with a frequency of 0 with a code length of 0.
-    for (uint32_t i = 0; i < alphabet_size - used_symbols; ++i)
-    {
-        code_lengths[symbol_index++] = 0;
-    }
-
     for (uint8_t i = 0; i < limit; ++i)
     {
         uint32_t num_symbols_with_len = i == 0
             ? active_leaves[i]
             : active_leaves[i] - active_leaves[i - 1];
-        for (uint32_t j = 0; j < num_symbols_with_len; ++j)
-        {
-            code_lengths[symbol_index++] = code_len;
-        }
-        assert(symbol_index <= alphabet_size && "It tried to add more code lengths than there are symbols.");
+        l[code_len - 1] = num_symbols_with_len;
         code_len--;
     }
-    while (symbol_index < alphabet_size) code_lengths[symbol_index--] = 0;
+}
+
+// Constructs a canonical prefix code.
+//
+// A canonical prefix code is a specific code amongst the several possibilities for a given alphabet
+// and frequencies. This prefix code fix additional rules making it very easy to describe in a
+// compact format.
+// https://en.wikipedia.org/wiki/Canonical_Huffman_code
+//
+// The generation algorithm is from the Deflate's RFC section 3.2.2.
+// https://datatracker.ietf.org/doc/html/rfc1951
+//
+// Basically, for each code length we compute its starting code. Then, knowing this, we can easily
+// iterate over the alphabet and attribute every symbol a code given its code length using the array
+// computed at the step before.
+void generate_prefix_code(const uint32_t* len_count, codeword_t* codewords, uint8_t max_len, size_t alphabet_size)
+{
+    // For each code length find the starting code value.
+    uint32_t next_codes[MAX_CODE_LENGTH + 1] = {0};
+    uint32_t code = 0;
+    for (uint32_t bits = 1; bits <= MAX_CODE_LENGTH; ++bits)
+    {
+        code = (code + len_count[bits - 1]) << 1;
+        next_codes[bits] = code;
+    }
+
+    // Attribute code to symbols.
+    for (uint32_t i = 0; i < alphabet_size; ++i)
+    {
+        uint32_t num_bits = codewords[i].num_bits;
+        if (num_bits != 0)
+        {
+            codewords[i].bits = next_codes[num_bits - 1]++;
+        }
+        // @Cleanup: content in this case should never be read so garbage could be left in there.
+        // Though, for debugging it is easier when things are properly initialized.
+        else
+        {
+            codewords[i].bits = 0;
+        }
+    }
+}
+
+// Assign code lengths for every symbol of the alphabet.
+void assign_code_length(const uint32_t* sorted, const uint32_t* l, codeword_t* codewords)
+{
+    uint32_t sorted_index = ALPHABET_SIZE - 1;
+    for (uint32_t len = 0; len < MAX_CODE_LENGTH; ++len)
+    {
+        uint32_t current = l[len];
+        while (current--)
+        {
+            codewords[sorted[sorted_index]].num_bits = len + 1;
+            codewords[sorted[sorted_index]].bits = 0;
+            sorted_index--;
+        }
+    }
+    while (sorted_index < ALPHABET_SIZE) // @Cleanup
+    {
+        codewords[sorted[sorted_index]].num_bits = 0;
+        codewords[sorted[sorted_index]].bits = 0;
+        sorted_index--;
+    }
 }
 
 uint8_t* huffman_compress(const uint8_t* input, size_t size)
@@ -137,17 +171,13 @@ uint8_t* huffman_compress(const uint8_t* input, size_t size)
     // @Note: feed package-merge only the frequencies that are non-zero.
     uint32_t active_leaves[MAX_CODE_LENGTH] = {0};
     package_merge(&freq.sorted[ALPHABET_SIZE - freq.num_used_symbols], freq.num_used_symbols, MAX_CODE_LENGTH, &active_leaves[0]);
-    uint32_t lengths[ALPHABET_SIZE] = {0};
-    package_merge_generate_lengths(&active_leaves[0], MAX_CODE_LENGTH, freq.num_used_symbols, ALPHABET_SIZE, &lengths[0]);
 
+    // Stores the number of symbols per code lengths. Indexes represents code lengths.
+    uint32_t l[MAX_CODE_LENGTH] = {0};
+    count_symbols_with_length(active_leaves, l, MAX_CODE_LENGTH);
     codeword_t codewords[ALPHABET_SIZE];
-    build_canonical_prefix_code(&lengths[0], &freq.sorted_indices[0], &codewords[0]);
-
-    // @Cleanup: for debug purposes only. Remove when done.
-    // for (int i = 0; i < freq.num_used_symbols; ++i)
-    // {
-        // printf("0x%x %d\n", i, codewords[i].num_bits);
-    // }
+    assign_code_length(freq.sorted_indices, l, codewords);
+    generate_prefix_code(l, codewords, MAX_CODE_LENGTH, ALPHABET_SIZE);
 
     // @Cleanup: debug only for checking prefix code reconstruction.
     /*
@@ -185,8 +215,8 @@ uint8_t* huffman_compress(const uint8_t* input, size_t size)
 uint8_t* huffman_uncompress(const uint8_t* compressed_data, size_t size)
 {
     // @Todo:
-    //  - check/test that the codes built are indeed canonical prefix codes.
     //  - lookup fast decoders and LUT ideas for fast decoding.
+
     // @Note: Huffman compression output has its last byte padded. Thus, when decompression it
     // is likely that few extra bytes, not originally present in the stream, are added (Max 7 more
     // if decoding 7 times a symbol with a code length 1). This won't be an issue when putting all
@@ -199,51 +229,26 @@ uint8_t* huffman_uncompress(const uint8_t* compressed_data, size_t size)
         .data = (uint8_t*)compressed_data,
     };
 
-    codeword_t codewords[ALPHABET_SIZE];
+    // Tally the number of symbols per code length.
+    uint32_t l[MAX_CODE_LENGTH] = {0};
+    codeword_t codewords[ALPHABET_SIZE] = {0};
     uint32_t bits_read = 0;
     for (uint32_t i = 0; i < ALPHABET_SIZE; ++i)
     {
-        codewords[i].num_bits = bitarray_bits_msb(&input, bits_read, 6);
+        uint32_t len = bitarray_bits_msb(&input, bits_read, 6);
+        if (len == 0)
+        {
+            codewords[i].num_bits = 0;
+        }
+        else
+        {
+            codewords[i].num_bits = len;
+            l[len - 1]++;
+        }
         bits_read += 6;
     }
 
-    // Sort by length.
-    uint32_t sorted[ALPHABET_SIZE];
-    for (uint32_t i = 0; i < ALPHABET_SIZE; ++i)
-    {
-        sorted[i] = i;
-    }
-
-    for (size_t i = 0; i < ALPHABET_SIZE; ++i)
-    {
-        for (size_t j = 0; j < ALPHABET_SIZE - i - 1; ++j)
-        {
-            uint32_t f1 = codewords[sorted[j]].num_bits;
-            uint32_t f2 = codewords[sorted[j + 1]].num_bits;
-            // Sort by frequency and alphabetically. Important for canonical prefix codes.
-            if (f1 < f2 || (f1 == f2 && sorted[j] > sorted[j + 1]))
-            {
-                size_t swap = sorted[j + 1];
-                sorted[j + 1] = sorted[j];
-                sorted[j] = swap;
-            }
-        }
-    }
-
-    // Rebuild prefix code.
-    uint32_t code = 0;
-    for (int i = ALPHABET_SIZE - 1; i >= 0; --i)
-    {
-        if (codewords[sorted[i]].num_bits == 0) continue;
-
-        uint32_t length = codewords[sorted[i]].num_bits;
-        // @Todo: add one more element to avoid the overflow condition ?
-        uint32_t next_length = i == 0 ? length : codewords[sorted[i - 1]].num_bits;
-
-        // codewords[sorted[i]].bits = code;
-        codewords[sorted[i]].bits = code;
-        code = (code + 1) << (next_length - length);
-    }
+    generate_prefix_code(l, codewords, MAX_CODE_LENGTH, ALPHABET_SIZE);
 
     // @Cleanup: debug only for checking prefix code reconstruction.
     /*
@@ -254,8 +259,9 @@ uint8_t* huffman_uncompress(const uint8_t* compressed_data, size_t size)
     }
     */
 
-    // Bruteforce decompression to quicky test things out O(N*M). N=bits_count, M=ALPHABET_SIZE.
-    // @Todo: change! This is dirty and really slow but proves that decoding works fine.
+    // Bruteforce decompression to quicky test things.
+    // @Todo: change this, it is only for testing purposes! This is dirty and really slow but proves
+    // that decoding works fine.
     uint8_t* output = NULL; // Array.
     uint32_t bit = 0;
     uint32_t len = 0;

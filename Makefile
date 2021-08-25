@@ -17,9 +17,9 @@ INCLUDES := \
 all: $(TARGET)
 
 $(TARGET): $(SOURCES) $(INCLUDES)
-	# clang -std=c11 -g3 -O0 -Wall -Wextra -I./ $(SOURCES)
-	clang -std=c11 -g3 -O0 -fsanitize=address -Wall -Wextra -I./ $(SOURCES)
-	# clang -std=c11 -O2 -DNDEBUG -Wall -Wextra -I./ $(SOURCES)
+	# clang -std=c11 -Wall -Wextra -g3 -O0 -I./ $(SOURCES)
+	clang -std=c11 -Wall -Wextra -g3 -O0 -fsanitize=address -I./ $(SOURCES)
+	# clang -std=c11 -Wall -Wextra -O2 -DNDEBUG -I./ $(SOURCES)
 
 package-merge: package_merge.c test/package_merge_test.c
 	# clang -std=c11 -Wall -Wextra -O2 -DNDEBUG -I./ $^
