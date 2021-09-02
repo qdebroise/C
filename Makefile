@@ -25,6 +25,9 @@ package-merge: package_merge.c test/package_merge_test.c
 	# clang -std=c11 -Wall -Wextra -O2 -DNDEBUG -I./ $^
 	clang -std=c11 -Wall -Wextra -O0 -g -fsanitize=address -I./ $^
 
+deflate: test/deflate_test.c deflate.c deflate.h array.h bitarray.h
+	clang -std=c11 -Wall -Wextra -O0 -g -fsanitize=address -I./ $^
+
 .PHONY: clean
 clean:
 	rm $(TARGET)

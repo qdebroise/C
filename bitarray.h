@@ -117,6 +117,8 @@
 
 #include "array.h"
 
+#include <stdint.h>
+
 // Public API.
 
 typedef struct bitarray_t bitarray_t;

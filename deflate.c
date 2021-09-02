@@ -1,14 +1,23 @@
-// References:
-//  - https://courses.cs.duke.edu//spring03/cps296.5/papers/ziv_lempel_1977_universal_algorithm.pdf
-//  - http://michael.dipperstein.com/lzss/
+#include "deflate.h"
+
+#include "bitarray.h"
+
+// [0-255] maps to the regular ASCII character.
+// 256 is the EOF symbol.
+// [257-285] maps to code lengths.
+#define LIT_LEN_ALPHABET_SIZE 285
+// Distance alphabet (see Deflate rfc for what symbol corresponds to which real offset).
+#define OFFSET_ALPHABET_SIZE 30
+
+// @Todo: next steps are:
+// - count symbols as they appear during lz compression.
+// - build sequences
+// - create & generate offset table (the one from the specs) 32K memory but O(1) lookups, can we do better ?
+
+
 //
-// https://github.com/ebiggers/libdeflate/blob/fbada10aa9da4ed8145a026a80cedff9601fb874/lib/hc_matchfinder.h
-
-#include "lz.h"
-
-#include "array.h"
-
-#include <stdint.h>
+// LZ77
+//
 
 // Use a 32K sliding window.
 #define WIN_BITS 15
@@ -46,6 +55,14 @@
 
 typedef struct lz_context_t lz_context_t;
 
+typedef struct sequence_t
+{
+    uint32_t start_index;
+    uint32_t num_literals;
+    uint32_t match_length;
+    uint32_t match_offset;
+} sequence_t;
+
 struct lz_context_t
 {
     const uint8_t* lookahead; // Pointer to the next bytes to compress.
@@ -54,9 +71,8 @@ struct lz_context_t
     // Pointer from which bytes positions inside the sliding window are computed.
     const uint8_t* base;
 
-    uint8_t* output; // Array.
-    uint32_t flag; // Flag byte index (we cannot use direct pointer because it will be invalidated on output resize).
-    uint8_t flag_count; // Flags written so far in the current flag byte.
+    sequence_t* sequences; // New output.
+    sequence_t  sequence;
 
     int16_t head[WIN_SIZE]; // Hashtable buckets.
     int16_t prev[WIN_SIZE]; // Hashtable linked list.
@@ -66,19 +82,31 @@ struct lz_context_t
 
     // Rolling hash to avoid recalculations. @Todo
     uint32_t rolling_hash;
+
+    uint32_t lit_len_count[LIT_LEN_ALPHABET_SIZE];
+    uint32_t dist_count[OFFSET_ALPHABET_SIZE];
 };
 
-static inline void init_lz_context(lz_context_t* ctx, const uint8_t* input, size_t size)
+static inline void lz_start_new_sequence(lz_context_t* ctx, const uint8_t* input)
+{
+    ctx->sequence.start_index = ctx->lookahead - input;
+    ctx->sequence.num_literals = 0;
+    ctx->sequence.match_length = 0;
+    ctx->sequence.match_offset = 0;
+}
+
+static inline void lz_init_context(lz_context_t* ctx, const uint8_t* input, size_t size)
 {
     *ctx = (lz_context_t){
         .lookahead = input,
         .input_end = input + size,
         .base = input,
-        .output = NULL,
+        .sequences = NULL,
         .match_search_depth = 64, // @Todo: compression level selection.
         .rolling_hash = 0,
-        .flag_count = 8, // So that it automatically "allocates" a new flag byte at the start.
     };
+
+    lz_start_new_sequence(ctx, input);
 
     for (int i = 0; i < WIN_SIZE; ++i)
     {
@@ -87,7 +115,7 @@ static inline void init_lz_context(lz_context_t* ctx, const uint8_t* input, size
     }
 }
 
-static inline uint32_t hash(const uint8_t* lookahead)
+static inline uint32_t lz_hash(const uint8_t* lookahead)
 {
     // @Todo: rolling hash and/or better hashing :p.
     return ((3483  * ((uint32_t)*(lookahead + 0))) +
@@ -95,7 +123,7 @@ static inline uint32_t hash(const uint8_t* lookahead)
             (6954  * ((uint32_t)*(lookahead + 2))));
 }
 
-static void reindex_hashtable(lz_context_t* ctx, uint32_t cur_relpos)
+static void lz_reindex_hashtable(lz_context_t* ctx, uint32_t cur_relpos)
 {
     for (uint32_t i = 0; i < WIN_SIZE; ++i)
     {
@@ -109,7 +137,7 @@ static void reindex_hashtable(lz_context_t* ctx, uint32_t cur_relpos)
     }
 }
 
-void find_longest_match(const lz_context_t* ctx, uint32_t* out_match_offset, uint32_t* out_match_length)
+void lz_find_longest_match(const lz_context_t* ctx, uint32_t* out_match_offset, uint32_t* out_match_length)
 {
     uint32_t best_match_length = 0;
     uint32_t best_match_offset = 0;
@@ -137,7 +165,7 @@ void find_longest_match(const lz_context_t* ctx, uint32_t* out_match_offset, uin
         return;
     }
 
-    uint16_t slot = hash(ctx->lookahead) & WIN_MASK;
+    uint16_t slot = lz_hash(ctx->lookahead) & WIN_MASK;
 
     const uint8_t* match = ctx->base + cur_relpos;
     int16_t match_pos = ctx->head[slot];
@@ -168,7 +196,7 @@ void find_longest_match(const lz_context_t* ctx, uint32_t* out_match_offset, uin
 }
 
 // Saves `count` input bytes into the directionnary.
-uint32_t record_bytes(lz_context_t* ctx, uint32_t num_bytes, uint32_t cur_relpos)
+uint32_t lz_record_bytes(lz_context_t* ctx, uint32_t num_bytes, uint32_t cur_relpos)
 {
     assert(num_bytes > 0 && "Invalid number of bytes to record.");
 
@@ -192,7 +220,7 @@ uint32_t record_bytes(lz_context_t* ctx, uint32_t num_bytes, uint32_t cur_relpos
     while (remaining--)
     {
 
-        uint32_t slot = hash(ctx->lookahead) & WIN_MASK;
+        uint32_t slot = lz_hash(ctx->lookahead) & WIN_MASK;
         ctx->prev[relpos] = ctx->head[slot];
         ctx->head[slot] = relpos;
 
@@ -201,7 +229,7 @@ uint32_t record_bytes(lz_context_t* ctx, uint32_t num_bytes, uint32_t cur_relpos
 
         if (relpos == MATCH_OFFSET_MAX)
         {
-            reindex_hashtable(ctx, relpos);
+            lz_reindex_hashtable(ctx, relpos);
             ctx->base = ctx->base + relpos;
             relpos = 0;
         }
@@ -214,7 +242,7 @@ uint32_t record_bytes(lz_context_t* ctx, uint32_t num_bytes, uint32_t cur_relpos
 
         if (relpos == MATCH_OFFSET_MAX)
         {
-            reindex_hashtable(ctx, relpos);
+            lz_reindex_hashtable(ctx, relpos);
             ctx->base = ctx->base + relpos;
             relpos = 0;
         }
@@ -223,34 +251,20 @@ uint32_t record_bytes(lz_context_t* ctx, uint32_t num_bytes, uint32_t cur_relpos
     return relpos;
 }
 
-void emit_literal(lz_context_t* ctx, uint8_t byte)
+void lz_emit_literal(lz_context_t* ctx, uint8_t byte)
 {
-    array_push(ctx->output, byte);
-    ctx->flag_count++;
+    ctx->sequence.num_literals++;
 }
 
-void emit_reference(lz_context_t* ctx, uint16_t offset, uint16_t length)
+void lz_emit_reference(lz_context_t* ctx, uint16_t offset, uint16_t length)
 {
-    // Offset is on 15 bits, length is on 9 bits. Store the length 9th bit in the highest bit of the offset 16 bit value.
-    uint8_t shift = WIN_BITS;
-
-    // @Todo: length range currently from 0 to 511, since we have a min length of 3 before emitting a reference we can
-    // have lengths in the range 0 + MIN_LEN to 511 + MIN_LEN. We simply shift averything by MIN_LEN. Thus an encoded length
-    // of 0 is actualy MIN_LEN and more generally an encoded length of L really is L + MIN_LEN.
-    uint16_t len_extra_bit = (length & (1 << 8)) >> 8;
-    uint8_t len = length & ((1 << 8) - 1);
-    uint16_t off = (offset & WIN_MASK) | (len_extra_bit << shift);
-
-    uint8_t b1 = len;
-    uint8_t b2 = off >> 8;
-    uint8_t b3 = off & ((1 << 8) - 1);
-
-    array_push(ctx->output, b1);
-    array_push(ctx->output, b2);
-    array_push(ctx->output, b3);
-
-    ctx->output[ctx->flag] |= (1 << ctx->flag_count);
-    ctx->flag_count++;
+    // @Todo: since we have a min length of 3 before emitting a reference we can have lengths in the
+    // range 0 + MIN_LEN to THEORETICAL_MAX_LEN + MIN_LEN. We simply shift everything by MIN_LEN.
+    // Thus an encoded length of 0 is actualy MIN_LEN and more generally an encoded length of L
+    // really is L + MIN_LEN.
+    ctx->sequence.match_length = length;
+    ctx->sequence.match_offset = offset;
+    array_push(ctx->sequences, ctx->sequence);
 }
 
 // =====================
@@ -311,10 +325,11 @@ void emit_reference(lz_context_t* ctx, uint16_t offset, uint16_t length)
 //      3                   27                          25
 //
 // Therefore matches with a length lower than take less space when coded as single characters.
-uint8_t* lz_compress(const uint8_t* input, size_t size)
+// uint8_t* lz_compress(const uint8_t* input, size_t size)
+sequence_t* lz_compress(const uint8_t* input, size_t size)
 {
     lz_context_t ctx;
-    init_lz_context(&ctx, input, size);
+    lz_init_context(&ctx, input, size);
 
     uint16_t cur_relpos = 0;
     uint32_t match_length;
@@ -322,14 +337,16 @@ uint8_t* lz_compress(const uint8_t* input, size_t size)
 
     while (ctx.lookahead != ctx.input_end)
     {
+        /*
         if (ctx.flag_count == 8)
         {
             ctx.flag_count = 0;
             ctx.flag = array_size(ctx.output);
             array_push(ctx.output, 0);
         }
+        */
 
-        find_longest_match(&ctx, &match_offset, &match_length);
+        lz_find_longest_match(&ctx, &match_offset, &match_length);
 
         if (match_length < MIN_MATCH_LEN)
         {
@@ -337,72 +354,97 @@ uint8_t* lz_compress(const uint8_t* input, size_t size)
             uint8_t num_literals = match_length == 0 ? 1 : match_length;
             for (uint8_t i = 0; i < num_literals; ++i)
             {
-                emit_literal(&ctx, ctx.base[cur_relpos + i]);
+                lz_emit_literal(&ctx, ctx.base[cur_relpos + i]);
 
+                /*
                 if (ctx.flag_count == 8)
                 {
                     ctx.flag_count = 0;
                     ctx.flag = array_size(ctx.output);
                     array_push(ctx.output, 0);
                 }
+                */
             }
-            cur_relpos = record_bytes(&ctx, num_literals, cur_relpos);
+            cur_relpos = lz_record_bytes(&ctx, num_literals, cur_relpos);
         }
         else
         {
             // Emit reference.
-            emit_reference(&ctx, match_offset, match_length);
-            cur_relpos = record_bytes(&ctx, match_length, cur_relpos);
+            lz_emit_reference(&ctx, match_offset, match_length);
+            lz_start_new_sequence(&ctx, input);
+            cur_relpos = lz_record_bytes(&ctx, match_length, cur_relpos);
         }
     }
 
-    return ctx.output;
+    // return ctx.output;
+    return ctx.sequences;
 }
 
-uint8_t* lz_uncompress(const uint8_t* compressed_data, size_t size)
+//
+// Deflate
+//
+
+// Deflate decoding tables from the specs section 3.2.5.
+// https://datatracker.ietf.org/doc/html/rfc1951
+static const uint32_t CODE_LENGTHS_CODEX[] =
+    {3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131,
+    163, 195, 227, 258};
+
+static const uint32_t CODE_LENGTHS_EXTRA_BITS[] =
+    {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0};
+
+static const uint32_t OFFSETS_CODEX[] =
+    {1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537,
+    2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577};
+
+static const uint32_t OFFSETS_EXTRA_BITS[] =
+    {0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13,
+    13};
+
+enum
 {
-    uint8_t* data = NULL; // Array.
+    // BFINAL
+    DEFLATE_NO_FINAL_BLOCK = 0,
+    DEFLATE_FINAL_BLOCK = 1,
 
-    uint8_t flags = compressed_data[0];
-    uint8_t flag_count = 0;
+    // BTYPE
+    DEFLATE_NO_COMPRESSION = 0,
+    DEFLATE_FIXED_CODES = 1,
+    DEFLATE_DYNAMIC_CODES = 2,
+    DEFLATE_ERROR = 3,
+};
 
-    size_t i;
-    for (i = 1; i < size;)
+void deflate_compress(const uint8_t* input, size_t size)
+{
+    bitarray_t output = {0};
+
+    // Each Deflate block starts with a 3 bits header.
+    // First bit BFINAL is set when it is the last block of the data stream.
+    // The next 2 bits BTYPE specifies how the data is compressed.
+    //  - 00 -> no compression
+    //  - 01 -> compressed with fixed Huffman codes
+    //  - 10 -> compressed with dynamic Huffman codes.
+    //  - 11 -> reserved (error).
+
+    // Compress a single block.
+    uint64_t header = (DEFLATE_FINAL_BLOCK << 2) | (DEFLATE_DYNAMIC_CODES);
+    bitarray_push_bits_msb(&output, header, 3);
+
+    // @Note: extra bits are written MSB first.
+
+    // Block format: see Deflate specs section 3.2.7.
+
+    // @Note: LZ77 intermediate representation format with sequences, # literals + match -> feed to the huffman is list of sequences.
+    // lz_compress(&deflate_ctx.lz_context, input, size);
+}
+
+void deflate_uncompress(const uint8_t* input, size_t size)
+{
+    /*
+    do
     {
-        if ((flags >> flag_count) & 0x1)
-        {
-            uint16_t len = compressed_data[i++];
-            uint16_t high = compressed_data[i++];
-            uint16_t low = compressed_data[i++];
-            uint16_t off = (high << 8) | low;
-
-            uint8_t shift = WIN_BITS;
-
-            uint16_t length = len | ((off >> shift) << 8);
-            uint16_t offset = off & ((1 << shift) - 1);
-
-            array_reserve(data, array_size(data) + length);
-            const uint8_t* it = data + array_size(data) - offset; // Not -1 because offset 0 is current char.
-            const uint8_t* end = it + length;
-            while (it != end)
-            {
-                array_push(data, *it);
-                ++it;
-            }
-        }
-        else
-        {
-            uint8_t byte = compressed_data[i++];
-            array_push(data, byte);
-        }
-
-        flag_count++;
-        if (flag_count == 8)
-        {
-            flags = compressed_data[i++];
-            flag_count = 0;
-        }
-    }
-
-    return data;
+        uint32_t bfinal = bitarray_bit_msb(input);
+        uint32_t btype = bitarray_bits_msb(input, 2);
+    } while (bfinal != DEFLATE_FINAL_BLOCK);
+    */
 }
